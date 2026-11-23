@@ -1,6 +1,13 @@
 import { CARDS } from './cards'
 import type { CardId, Profile } from './types'
 
+/** The most advanced enemy push: how dangerous (sum of card cost / 4) and where its lead troop is, in this AI's own coordinates (its towers at negative z). */
+export interface Threat {
+  level: number
+  x: number
+  z: number
+}
+
 export interface AIDecision {
   cardId: CardId
   lane: -1 | 1
@@ -24,37 +31,46 @@ export class RivalAI {
     this.deck = ['knight', 'archers', 'giant', 'musketeer', 'minions', 'bomber', 'prince', 'dragon']
   }
 
-  update(dt: number, threat: number, myTroops: number, elixirCap = 10): AIDecision | null {
+  /**
+   * Pick a card to play, or null. The AI only *chooses*: Game.deploy() checks
+   * and spends the elixir, so a play that can't happen costs nothing. (It used
+   * to subtract here as well, so every play was paid twice and nearly always
+   * rejected; the AI almost never got a troop onto the field.)
+   */
+  update(dt: number, threat: Threat | null, myTroops: number, elixirCap = 10): AIDecision | null {
     this.elixir = Math.min(elixirCap, this.elixir + dt * (1 / 2.8))
     this.timer += dt
-    if (this.timer < 1.2) return null
+    if (this.timer < 0.8) return null
     this.timer = 0
-    // Defend hard when blue troops are close to red towers.
-    if (threat > 0.45 && this.elixir >= 3) {
-      const cheap = this.deck.filter((c) => CARDS[c].cost <= this.elixir && CARDS[c].cost <= 4)
-      if (cheap.length) {
-        const cardId = cheap[Math.floor(Math.random() * cheap.length)]
-        this.elixir -= CARDS[cardId].cost
-        const lane = Math.random() < 0.5 ? -1 : 1
-        return { cardId, lane, x: lane * 4.2, z: -6 }
+    const pick = (ok: (c: CardId) => boolean): CardId | null => {
+      const options = this.deck.filter((c) => ok(c) && CARDS[c].cost <= this.elixir)
+      return options.length ? options[Math.floor(Math.random() * options.length)] : null
+    }
+    // Defend: answer troops heading for our towers, in their lane and path.
+    if (threat && threat.level >= 0.6) {
+      const cardId = pick((c) => CARDS[c].cost <= 4)
+      if (cardId) {
+        const lane: -1 | 1 = threat.x < 0 ? -1 : 1
+        const x = Math.max(-9, Math.min(9, threat.x))
+        const z = Math.max(-11, Math.min(-2, threat.z - 3))
+        return { cardId, lane, x, z }
       }
+      return null // save up rather than starting a push while under attack
     }
     // Attack in a push when elixir is high and we are not outnumbered.
     if (this.elixir >= 7 && myTroops <= 3) {
-      const big = this.deck.filter((c) => CARDS[c].cost >= 4 && CARDS[c].cost <= this.elixir)
-      if (big.length) {
-        const cardId = big[Math.floor(Math.random() * big.length)]
-        this.elixir -= CARDS[cardId].cost
-        const lane = Math.random() < 0.5 ? -1 : 1
+      const cardId = pick((c) => CARDS[c].cost >= 4)
+      if (cardId) {
+        const lane: -1 | 1 = Math.random() < 0.5 ? -1 : 1
         return { cardId, lane, x: lane * 4.2, z: -10 }
       }
     }
     if (this.elixir >= 9) {
-      const affordable = this.deck.filter((c) => CARDS[c].cost <= this.elixir)
-      const cardId = affordable[Math.floor(Math.random() * affordable.length)]
-      this.elixir -= CARDS[cardId].cost
-      const lane = Math.random() < 0.5 ? -1 : 1
-      return { cardId, lane, x: lane * 4.2, z: -9 }
+      const cardId = pick(() => true)
+      if (cardId) {
+        const lane: -1 | 1 = Math.random() < 0.5 ? -1 : 1
+        return { cardId, lane, x: lane * 4.2, z: -9 }
+      }
     }
     return null
   }

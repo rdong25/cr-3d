@@ -1,4 +1,5 @@
 import { CARDS } from './cards'
+import type { Threat } from './ai'
 import { RivalAI } from './ai'
 import { sfx } from './sound'
 import type { CardId, MatchRecord, Profile, Side, TowerState, TroopState } from './types'
@@ -79,7 +80,7 @@ export class Game {
       if (cardId !== 'fireball' && z < 0.5) return false // troops: own half only; spells go anywhere
       this.elixir -= def.cost
     }
-    if (side === 'red' && this.mode === 'battle') {
+    if (side === 'red') {
       if (this.ai.elixir < def.cost) return false
       this.ai.elixir -= def.cost
     }
@@ -178,6 +179,24 @@ export class Game {
     this.events.onUpdate()
   }
 
+  /**
+   * Enemy troops near or past the river heading for `side`'s towers, as an AI
+   * threat in that side's own frame (its towers at negative z; blue is mirrored).
+   */
+  private threatTo(side: Side): Threat | null {
+    const flip = side === 'red' ? 1 : -1
+    let level = 0, lead: TroopState | null = null
+    for (const t of this.troops) {
+      if (t.side === side || t.dead) continue
+      const z = t.z * flip
+      if (z > 3) continue // still well inside their own half
+      const def = CARDS[t.cardId]
+      level += def.cost / Math.max(1, def.count) / 4
+      if (!lead || z < lead.z * flip) lead = t
+    }
+    return lead ? { level, x: lead.x * flip, z: lead.z * flip } : null
+  }
+
   update(dt: number) {
     if (this.phase !== 'playing') return
     // Timer
@@ -199,13 +218,11 @@ export class Game {
     this.aiTimer += dt
     if (this.aiTimer > 0.5) {
       this.aiTimer = 0
-      const threat = this.troops.filter((t) => t.side === 'blue' && t.z < 0).length / 4
-      const dec = this.ai.update(0.5, threat, this.troops.filter((t) => t.side === 'red').length)
+      const dec = this.ai.update(0.5, this.threatTo('red'), this.troops.filter((t) => t.side === 'red').length)
       if (dec) this.deploy(dec.cardId, 'red', dec.x, dec.z, dec.lane)
       if (this.mode === 'spectate' && this.spectateAI) {
-        const threatB = this.troops.filter((t) => t.side === 'red' && t.z > 0).length / 4
-        const decB = this.spectateAI.update(0.5, threatB, this.troops.filter((t) => t.side === 'blue').length)
-        if (decB) {
+        const decB = this.spectateAI.update(0.5, this.threatTo('blue'), this.troops.filter((t) => t.side === 'blue').length)
+        if (decB && this.spectateAI.elixir >= CARDS[decB.cardId].cost) {
           // Spectate blue AI deploys on blue side, bypassing player elixir.
           const def = CARDS[decB.cardId]
           this.spectateAI.elixir -= def.cost
