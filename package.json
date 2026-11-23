@@ -20,7 +20,16 @@
     "build": "tsc -b && vite build",
     "dev": "vite",
     "preview": "vite preview",
-    "build:hero": "node tools/hero/build.mjs"
+    "build:hero": "node tools/hero/build.mjs",
+    "build:hero-giant": "node tools/giant/build.mjs",
+    "build:hero-prince": "node tools/prince/build.mjs",
+    "build:hero-archers": "node tools/archers/build.mjs",
+    "build:hero-musketeer": "node tools/musketeer/build.mjs",
+    "build:hero-bomber": "node tools/bomber/build.mjs",
+    "build:hero-skeletons": "node tools/skeletons/build.mjs",
+    "build:hero-minions": "node tools/minions/build.mjs",
+    "build:hero-dragon": "node tools/dragon/build.mjs",
+    "build:heroes": "npm run build:hero && npm run build:hero-giant && npm run build:hero-prince && npm run build:hero-archers && npm run build:hero-musketeer && npm run build:hero-bomber && npm run build:hero-skeletons && npm run build:hero-minions && npm run build:hero-dragon"
   },
   "type": "module",
   "version": "1.0.0"

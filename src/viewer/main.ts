@@ -1,8 +1,21 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { HeroInstance, makeArenaEnvironment, preloadHero, setHeroEnvironment } from '../hero'
+import { HeroInstance, makeArenaEnvironment, preloadHero, preloadHeroes, setHeroEnvironment, type HeroCardId } from '../hero'
 import { animateRig, buildTroop, type Rig } from '../characters'
-import type { Side } from '../types'
+import type { CardId, Side } from '../types'
+
+/** Every generated hero, in deploy order. Fireball is a spell — no hero. */
+const HEROES: { cardId: HeroCardId; name: string }[] = [
+  { cardId: 'knight', name: 'Ember Warden (Knight)' },
+  { cardId: 'giant', name: 'Giant' },
+  { cardId: 'prince', name: 'Prince' },
+  { cardId: 'archers', name: 'Archers' },
+  { cardId: 'musketeer', name: 'Musketeer' },
+  { cardId: 'bomber', name: 'Bomber' },
+  { cardId: 'skeletons', name: 'Skeletons' },
+  { cardId: 'minions', name: 'Minions' },
+  { cardId: 'dragon', name: 'Baby Dragon' },
+]
 
 // Standalone character viewer: same lights and environment as the arena, the
 // hero on a turf disc, buttons for each clip, and an old-vs-new comparison.
@@ -50,8 +63,9 @@ setHeroEnvironment(makeArenaEnvironment(renderer))
 const stats = document.getElementById('stats')!
 const captions = document.getElementById('captions')!
 let team: Side = 'blue'
+let heroId: HeroCardId = 'knight'
 let hero: HeroInstance | null = null
-let oldKnight: Rig | null = null
+let oldTroop: Rig | null = null
 let compare = false
 let turntable = true
 let wire = false
@@ -62,30 +76,32 @@ scene.add(pivot)
 
 function spawn() {
   hero?.dispose()
-  hero = new HeroInstance(team)
+  hero = new HeroInstance(team, heroId)
   hero.group.position.x = compare ? 0.75 : 0
   pivot.add(hero.group)
   applyWire()
   applyBones()
   play(clip === 'Death' ? 'Idle' : clip)
+  const name = HEROES.find((h) => h.cardId === heroId)!.name
+  document.querySelector('h1')!.textContent = name
   let tris = 0, boneCount = 0
   hero.group.traverse((o) => {
     const m = o as THREE.Mesh
     if (m.isMesh) tris += (m.geometry.index?.count ?? 0) / 3
     if ((o as THREE.Bone).isBone) boneCount++
   })
-  stats.textContent = `${tris.toLocaleString()} triangles · ${boneCount} bones · 4 clips`
+  stats.textContent = `${name} · ${tris.toLocaleString()} triangles · ${boneCount} bones · 4 clips`
 }
 
 function setCompare(on: boolean) {
   compare = on
   captions.classList.toggle('single', !on)
-  if (oldKnight) { pivot.remove(oldKnight.group); oldKnight = null }
+  if (oldTroop) { pivot.remove(oldTroop.group); oldTroop = null }
   if (on) {
-    oldKnight = buildTroop('knight', team)
-    oldKnight.group.position.x = -0.75
-    oldKnight.group.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true })
-    pivot.add(oldKnight.group)
+    oldTroop = buildTroop(heroId as CardId, team)
+    oldTroop.group.position.x = -0.75
+    oldTroop.group.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true })
+    pivot.add(oldTroop.group)
   }
   if (hero) hero.group.position.x = on ? 0.75 : 0
   controls.target.set(0, 0.85, 0)
@@ -115,6 +131,19 @@ function applyBones() {
   }
 }
 
+const heroesRow = document.getElementById('heroes')!
+for (const h of HEROES) {
+  const b = document.createElement('button')
+  b.textContent = h.name; b.dataset.hero = h.cardId
+  b.classList.toggle('on', h.cardId === heroId)
+  b.onclick = () => {
+    heroId = h.cardId as HeroCardId
+    document.querySelectorAll<HTMLButtonElement>('#heroes button').forEach((x) => x.classList.toggle('on', x === b))
+    document.getElementById('compare')!.textContent = `Compare with old ${h.name}`
+    spawn(); setCompare(compare)
+  }
+  heroesRow.append(b)
+}
 const clipsRow = document.getElementById('clips')!
 for (const name of ['Idle', 'Walk', 'Attack', 'Death']) {
   const b = document.createElement('button')
@@ -154,11 +183,14 @@ function resize() {
 window.addEventListener('resize', resize)
 resize()
 
-// URL params make screenshots reproducible: ?clip=Walk&t=0.3&team=red&compare=1&yaw=0.6
+// URL params make screenshots reproducible: ?hero=giant&clip=Walk&t=0.3&team=red&compare=1&yaw=0.6
 const params = new URLSearchParams(location.search)
 const clock = new THREE.Clock()
 let time = 0
-preloadHero().then(() => {
+// Fetch every hero in the background so switching is instant; wait only for the selected one.
+preloadHeroes()
+if (params.get('hero') && HEROES.some((h) => h.cardId === params.get('hero'))) heroId = params.get('hero') as HeroCardId
+preloadHero(heroId).then(() => {
   if (params.get('team') === 'red') team = 'red'
   document.querySelectorAll('[data-team]').forEach((x) => x.classList.toggle('on', (x as HTMLElement).dataset.team === team))
   if (params.get('clip')) clip = params.get('clip')!
@@ -174,7 +206,7 @@ preloadHero().then(() => {
     time += dt
     if (turntable) pivot.rotation.y += dt * 0.35
     hero?.update(dt, time)
-    if (oldKnight) animateRig(oldKnight, time, clip === 'Walk', clip === 'Attack')
+    if (oldTroop) animateRig(oldTroop, time, clip === 'Walk', clip === 'Attack')
     controls.update()
     renderer.render(scene, camera)
   })

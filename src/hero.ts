@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js'
-import type { Side } from './types'
+import type { CardId, Side } from './types'
 
 // Runtime for skinned, animated .glb characters — the part of the pipeline
 // that stays the same whether the model came from tools/hero (generated) or
@@ -13,36 +13,56 @@ import type { Side } from './types'
 //   - a material named "Warden_Team" for team-colored parts (white-ish base)
 //   - optional emissive "Warden_Glow" material
 
-const MODEL_URL = `${import.meta.env.BASE_URL}models/ember-warden.glb`
+/** One generated .glb per troop (Fireball is a spell — no hero). */
+export const HERO_URLS: Record<Exclude<CardId, 'fireball'>, string> = {
+  knight: `${import.meta.env.BASE_URL}models/ember-warden.glb`,
+  giant: `${import.meta.env.BASE_URL}models/giant.glb`,
+  prince: `${import.meta.env.BASE_URL}models/prince.glb`,
+  archers: `${import.meta.env.BASE_URL}models/archers.glb`,
+  musketeer: `${import.meta.env.BASE_URL}models/musketeer.glb`,
+  bomber: `${import.meta.env.BASE_URL}models/bomber.glb`,
+  skeletons: `${import.meta.env.BASE_URL}models/skeletons.glb`,
+  minions: `${import.meta.env.BASE_URL}models/minions.glb`,
+  dragon: `${import.meta.env.BASE_URL}models/dragon.glb`,
+}
+export type HeroCardId = keyof typeof HERO_URLS
+export const HERO_CARDS = Object.keys(HERO_URLS) as HeroCardId[]
+export const isHeroCard = (id: CardId): id is HeroCardId => id in HERO_URLS
 export const TEAM_COLORS: Record<Side, number> = { blue: 0x2f6df6, red: 0xe23b3b }
 /** Ground distance covered by one Walk cycle at timeScale 1 (keeps feet from sliding). */
 const WALK_SPEED_AT_1X = 1.15
 
 interface Asset { scene: THREE.Group; clips: Map<string, THREE.AnimationClip> }
-let asset: Asset | null = null
-let loading: Promise<Asset> | null = null
+const assets = new Map<HeroCardId, Asset>()
+const loading = new Map<HeroCardId, Promise<Asset>>()
 
-export function preloadHero(): Promise<Asset> {
-  if (!loading) {
-    loading = new GLTFLoader().loadAsync(MODEL_URL).then((gltf) => {
-      asset = { scene: gltf.scene, clips: new Map(gltf.animations.map((c) => [c.name, c])) }
-      return asset
-    })
-    loading.catch((err) => { console.warn('Hero model failed to load; using procedural troops.', err); loading = null })
-  }
-  return loading
+export function preloadHero(cardId: HeroCardId = 'knight'): Promise<Asset> {
+  const existing = loading.get(cardId)
+  if (existing) return existing
+  const p = new GLTFLoader().loadAsync(HERO_URLS[cardId]).then((gltf) => {
+    const asset = { scene: gltf.scene, clips: new Map(gltf.animations.map((c) => [c.name, c])) }
+    assets.set(cardId, asset)
+    return asset
+  })
+  p.catch((err) => { console.warn(`Hero model ${cardId} failed to load; using procedural troops.`, err); loading.delete(cardId) })
+  loading.set(cardId, p)
+  return p
 }
-export const heroReady = () => asset !== null
+/** Start fetching every hero model right away; troops fall back to the procedural rig until theirs loads. */
+export function preloadHeroes(): Promise<Asset>[] { return HERO_CARDS.map((c) => preloadHero(c)) }
+export const heroReady = (cardId: HeroCardId = 'knight') => assets.has(cardId)
 
-// --- materials: one set per team, shared by every instance --------------------------
-const materialSets = new Map<Side, Map<string, THREE.MeshStandardMaterial>>()
+// --- materials: one set per team per hero, shared by every instance --------------------------
+const materialSets = new Map<string, Map<string, THREE.MeshStandardMaterial>>()
 let envMap: THREE.Texture | null = null
 
-function materialsFor(side: Side): Map<string, THREE.MeshStandardMaterial> {
-  let set = materialSets.get(side)
+function materialsFor(side: Side, cardId: HeroCardId): Map<string, THREE.MeshStandardMaterial> {
+  const key = `${cardId}:${side}`
+  let set = materialSets.get(key)
   if (set) return set
+  const asset = assets.get(cardId)!
   set = new Map()
-  asset!.scene.traverse((o) => {
+  asset.scene.traverse((o) => {
     const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined
     if (!m || set!.has(m.name)) return
     const c = m.clone()
@@ -51,7 +71,7 @@ function materialsFor(side: Side): Map<string, THREE.MeshStandardMaterial> {
     c.envMapIntensity = c.name === 'Warden_Metal' ? 1.1 : 0.6
     set!.set(c.name, c)
   })
-  materialSets.set(side, set)
+  materialSets.set(key, set)
   return set
 }
 
@@ -119,12 +139,13 @@ export class HeroInstance {
   private glowMat: THREE.MeshStandardMaterial | undefined
   dead = false
 
-  constructor(side: Side) {
-    if (!asset) throw new Error('preloadHero() must resolve before creating heroes')
+  constructor(side: Side, cardId: HeroCardId = 'knight') {
+    const asset = assets.get(cardId)
+    if (!asset) throw new Error(`preloadHero('${cardId}') must resolve before creating heroes`)
     // SkeletonUtils.clone re-binds the cloned meshes to the cloned bones —
     // a plain .clone() would leave every copy driven by the original skeleton.
     const model = SkeletonUtils.clone(asset.scene)
-    const mats = materialsFor(side)
+    const mats = materialsFor(side, cardId)
     model.traverse((o) => {
       const mesh = o as THREE.SkinnedMesh
       if (!mesh.isMesh) return
@@ -136,8 +157,12 @@ export class HeroInstance {
     this.glowMat = mats.get('Warden_Glow')
     this.group.add(model)
     this.head = model.getObjectByName('head')!
-    const visor = glowSprite(0.34, 0.13); visor.position.set(0, 0.19, 0.27); this.head.add(visor)
-    const gem = glowSprite(0.2, 0.2); gem.position.set(0, 0.05, 0.25); model.getObjectByName('chest')!.add(gem)
+    // Only heroes with a glow material get the eye/chest halos — Archers and
+    // Musketeer have no glow parts, so a sprite there would float in mid-air.
+    if (this.glowMat) {
+      const visor = glowSprite(0.34, 0.13); visor.position.set(0, 0.19, 0.27); this.head.add(visor)
+      const gem = glowSprite(0.2, 0.2); gem.position.set(0, 0.05, 0.25); model.getObjectByName('chest')!.add(gem)
+    }
 
     this.mixer = new THREE.AnimationMixer(model)
     for (const name of ['Idle', 'Walk', 'Attack', 'Death'] as ClipName[]) {

@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { buildKing, buildPrincess, buildTroop, animateRig, type Rig } from './characters'
 import type { CameraMode, CardId, Side, TowerState, TroopState } from './types'
-import { HeroInstance, heroReady, makeArenaEnvironment, setHeroEnvironment } from './hero'
+import { HeroInstance, heroReady, isHeroCard, makeArenaEnvironment, setHeroEnvironment } from './hero'
 
 // Golden-hour stadium: gradient sky dome, warm key light + soft shadows,
 // cool rim fill, horizon haze, floodlit stands, torch lights, dust motes,
@@ -17,7 +17,7 @@ export class Engine {
   camera: THREE.PerspectiveCamera
   rigs = new Map<number, Rig>()
   /** Troops rendered with a skinned .glb character instead of a procedural rig. */
-  heroes = new Map<number, { hero: HeroInstance; side: Side; x: number; z: number; cd: number; yaw: number }>()
+  heroes = new Map<number, { hero: HeroInstance; side: Side; x: number; z: number; cd: number; yaw: number; flying: boolean }>()
   private dying: { hero: HeroInstance; t: number; dur: number }[] = []
   private deployHint = {
     troop: new THREE.Mesh(new THREE.PlaneGeometry(22, 13), new THREE.MeshBasicMaterial({ color: 0x4a90ff, transparent: true, opacity: 0.12, depthWrite: false })),
@@ -224,13 +224,13 @@ export class Engine {
   }
 
   addTroop(t: TroopState) {
-    if (t.cardId === 'knight' && heroReady()) {
-      const hero = new HeroInstance(t.side)
+    if (isHeroCard(t.cardId) && heroReady(t.cardId)) {
+      const hero = new HeroInstance(t.side, t.cardId)
       const yaw = t.side === 'blue' ? Math.PI : 0
-      hero.group.position.set(t.x, 0, t.z)
+      hero.group.position.set(t.x, t.flying ? 1.1 : 0, t.z)
       hero.group.rotation.y = yaw
       this.scene.add(hero.group)
-      this.heroes.set(t.id, { hero, side: t.side, x: t.x, z: t.z, cd: t.attackCd, yaw })
+      this.heroes.set(t.id, { hero, side: t.side, x: t.x, z: t.z, cd: t.attackCd, yaw, flying: t.flying })
       return
     }
     const rig = buildTroop(t.cardId, t.side)
@@ -411,7 +411,7 @@ export class Engine {
         const diff = Math.atan2(Math.sin(want - h.yaw), Math.cos(want - h.yaw))
         h.yaw += diff * Math.min(1, dt * 8)
       }
-      h.hero.group.position.set(tr.x, 0, tr.z)
+      h.hero.group.position.set(tr.x, h.flying ? 1.1 + Math.sin(t * 3 + tr.id) * 0.12 : 0, tr.z)
       h.hero.group.rotation.y = h.yaw
       h.hero.setSpeed(speed)
       // game.ts resets attackCd to 1 on the frame a hit lands.

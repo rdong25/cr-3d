@@ -147,8 +147,11 @@ facing) is shared.
 
 ## Ideas for next steps
 
-- Run the same treatment for the Giant and Prince: copy `design.mjs`, keep
-  the skeleton, sculpt new pieces.
+- Done: the same treatment now covers all nine troops — see
+  [HEROES.md](HEROES.md). Giant, Prince, Archers, Musketeer, Bomber,
+  Skeletons, Minions and Baby Dragon each have their own `tools/<slug>/`
+  (a copy of `tools/hero/`), their own `.glb` in `public/models/`, and
+  `src/hero.ts` maps every `CardId` to its model.
 - Add a `Spawn` clip (drop-in from the sky) and a `Victory` clip for emotes.
 - Add a bloom pass (`UnrealBloomPass`) so the ember eyes and runes glow in
   the full scene, not just through the sprite halos.
