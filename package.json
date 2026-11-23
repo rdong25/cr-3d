@@ -29,7 +29,8 @@
     "build:hero-skeletons": "node tools/skeletons/build.mjs",
     "build:hero-minions": "node tools/minions/build.mjs",
     "build:hero-dragon": "node tools/dragon/build.mjs",
-    "build:heroes": "npm run build:hero && npm run build:hero-giant && npm run build:hero-prince && npm run build:hero-archers && npm run build:hero-musketeer && npm run build:hero-bomber && npm run build:hero-skeletons && npm run build:hero-minions && npm run build:hero-dragon"
+    "build:heroes": "npm run build:hero && npm run build:hero-giant && npm run build:hero-prince && npm run build:hero-archers && npm run build:hero-musketeer && npm run build:hero-bomber && npm run build:hero-skeletons && npm run build:hero-minions && npm run build:hero-dragon",
+    "build:arena": "node tools/arena/build.mjs"
   },
   "type": "module",
   "version": "1.0.0"

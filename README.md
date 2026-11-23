@@ -20,6 +20,7 @@ npm run build    # typecheck + production build into dist/
 npm run preview  # serve the production build
 npm run build:hero   # regenerate public/models/ember-warden.glb (Knight)
 npm run build:heroes # regenerate all nine hero .glb files
+npm run build:arena  # regenerate the towers and bridge (public/models/arena)
 ```
 
 Character viewer: `http://localhost:5173/viewer.html` — all nine heroes,

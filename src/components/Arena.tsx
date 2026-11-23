@@ -57,6 +57,18 @@ function snapshotOf(g: Game): Snapshot {
   }
 }
 
+/** Show a frame error on screen (phones have no console) so it can be screenshotted. */
+function showFrameError(msg: string) {
+  let el = document.getElementById('frameError')
+  if (!el) {
+    el = document.createElement('div')
+    el.id = 'frameError'
+    el.style.cssText = 'position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:50;background:rgba(150,20,20,.92);color:#fff;font:12px/1.35 ui-monospace,Menlo,monospace;padding:8px 10px;border-radius:10px;pointer-events:none'
+    document.body.appendChild(el)
+  }
+  el.textContent = `Error (please screenshot): ${msg}`
+}
+
 const Arena = forwardRef<ArenaHandle, Props>(function Arena({ profile, mode, active, camera, onSnapshot, onBanner, onEnd }, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<Engine | null>(null)
@@ -96,16 +108,28 @@ const Arena = forwardRef<ArenaHandle, Props>(function Arena({ profile, mode, act
       cbRef.current.onSnapshot(snapshotOf(game))
     }
 
+    let lastError = ''
     const loop = (now: number) => {
       if (!alive || !engine || !game) return
-      const dt = Math.min(0.05, (now - last) / 1000)
-      last = now
-      if (active) game.update(dt)
-      const sel = game.selected
-      const canPlay = active && game.mode === 'battle' && game.phase === 'playing' && sel != null && game.elixir >= CARDS[sel].cost
-      engine.setDeployHint(canPlay ? (sel === 'fireball' ? 'spell' : 'troop') : null)
-      engine.render(dt, game.troops, game.towers)
+      // Schedule the next frame first: an exception below must never freeze the
+      // match (elixir, timer and troops all stop if the loop dies).
       raf = requestAnimationFrame(loop)
+      const dt = Math.max(0, Math.min(0.05, (now - last) / 1000))
+      last = now
+      try {
+        if (active) game.update(dt)
+        const sel = game.selected
+        const canPlay = active && game.mode === 'battle' && game.phase === 'playing' && sel != null && game.elixir >= CARDS[sel].cost
+        engine.setDeployHint(canPlay ? (sel === 'fireball' ? 'spell' : 'troop') : null)
+        engine.render(dt, game.troops, game.towers)
+      } catch (err) {
+        const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+        if (msg !== lastError) {
+          lastError = msg
+          console.error('Frame error', err)
+          showFrameError(msg)
+        }
+      }
     }
     raf = requestAnimationFrame(loop)
 

@@ -232,3 +232,35 @@ export function fbm(x, y, z, octaves = 4) {
   for (let i = 0; i < octaves; i++) { s += a * noise3(x * f, y * f, z * f); n += a; a *= 0.5; f *= 2 }
   return s / n
 }
+
+// --- extras used by the arena props ------------------------------------------
+/** Capped cone along local Y, centred at c: bottom radius r1, top radius r2, half height h (iq). */
+export function cappedCone(c, h, r1, r2) {
+  const k2x = r2 - r1, k2y = 2 * h, k2l = k2x * k2x + k2y * k2y
+  const r = Math.max(r1, r2)
+  return node((x, y, z) => {
+    const qx = Math.hypot(x - c[0], z - c[2]), qy = y - c[1]
+    const cax = qx - Math.min(qx, qy < 0 ? r1 : r2), cay = Math.abs(qy) - h
+    const t = Math.max(0, Math.min(1, ((r2 - qx) * k2x + (h - qy) * k2y) / k2l))
+    const cbx = qx - r2 + k2x * t, cby = qy - h + k2y * t
+    const s = cbx < 0 && cay < 0 ? -1 : 1
+    return s * Math.sqrt(Math.min(cax * cax + cay * cay, cbx * cbx + cby * cby))
+  }, [c[0] - r, c[1] - h, c[2] - r], [c[0] + r, c[1] + h, c[2] + r])
+}
+
+/**
+ * Repeat a node `count` times around the Y axis through `axis` ([x, z]).
+ * Build the template at angle 0, i.e. on the +X side of the axis.
+ * `offset` rotates the whole ring (radians).
+ */
+export function repeatAround(n, count, axis = [0, 0], offset = 0, reach = null) {
+  const sector = (2 * Math.PI) / count
+  const R = reach ?? Math.max(Math.abs(n.min[0] - axis[0]), Math.abs(n.max[0] - axis[0]), Math.abs(n.min[2] - axis[1]), Math.abs(n.max[2] - axis[1]))
+  return node((x, y, z) => {
+    const dx = x - axis[0], dz = z - axis[1]
+    let a = Math.atan2(dz, dx) - offset
+    a = a - sector * Math.round(a / sector)
+    const r = Math.hypot(dx, dz)
+    return n.d(axis[0] + r * Math.cos(a), y, axis[1] + r * Math.sin(a))
+  }, [axis[0] - R, n.min[1], axis[1] - R], [axis[0] + R, n.max[1], axis[1] + R])
+}

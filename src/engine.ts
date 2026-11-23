@@ -1,7 +1,9 @@
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { buildKing, buildPrincess, buildTroop, animateRig, type Rig } from './characters'
 import type { CameraMode, CardId, Side, TowerState, TroopState } from './types'
 import { HeroInstance, heroReady, isHeroCard, makeArenaEnvironment, setHeroEnvironment } from './hero'
+import { TOWER_FLOOR, arenaReady, buildField, makeBridge, makeTower, preloadArena, type Field } from './arena'
 
 // Golden-hour stadium: gradient sky dome, warm key light + soft shadows,
 // cool rim fill, horizon haze, floodlit stands, torch lights, dust motes,
@@ -59,8 +61,10 @@ export class Engine {
   keys = new Set<string>()
   shake = 0
   riverMat: THREE.MeshStandardMaterial
+  private env: THREE.Texture
+  private field: Field | null = null
   crowd: THREE.InstancedMesh
-  crowdData: { x: number; z: number; phase: number; c: THREE.Color }[] = []
+  crowdData: { x: number; z: number; y: number; phase: number; c: THREE.Color }[] = []
   flash = 0
   time = 0
   private container: HTMLElement
@@ -81,7 +85,11 @@ export class Engine {
     this.renderer.toneMappingExposure = 1.12
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     container.appendChild(this.renderer.domElement)
-    setHeroEnvironment(makeArenaEnvironment(this.renderer))
+    this.env = makeArenaEnvironment(this.renderer)
+    setHeroEnvironment(this.env)
+    // Soft image-based fill for every PBR material in the arena.
+    this.scene.environment = this.env
+    this.scene.environmentIntensity = 0.35
     for (const [k, m] of Object.entries(this.deployHint)) {
       m.rotation.x = -Math.PI / 2
       m.position.set(0, 0.04, k === 'troop' ? 7.5 : 0)
@@ -114,7 +122,9 @@ export class Engine {
     const sunLight = new THREE.DirectionalLight(0xffc27a, 2.4)
     sunLight.position.set(-18, 22, 10)
     sunLight.castShadow = true
-    sunLight.shadow.mapSize.set(1024, 1024)
+    sunLight.shadow.mapSize.set(2048, 2048)
+    sunLight.shadow.bias = -0.0005
+    sunLight.shadow.normalBias = 0.03
     sunLight.shadow.camera.left = -22; sunLight.shadow.camera.right = 22
     sunLight.shadow.camera.top = 22; sunLight.shadow.camera.bottom = -22
     this.scene.add(sunLight)
@@ -123,17 +133,17 @@ export class Engine {
     this.scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x3d5a2a, 0.5))
 
     this.buildArena()
-    this.riverMat = new THREE.MeshStandardMaterial({ color: 0x2a7fd4, roughness: 0.15, metalness: 0.2, transparent: true, opacity: 0.92 })
-    const river = new THREE.Mesh(new THREE.PlaneGeometry(26, 2.6), this.riverMat)
-    river.rotation.x = -Math.PI / 2; river.position.set(0, 0.02, 0); this.scene.add(river)
-    // River flow stripes
-    for (let i = 0; i < 8; i++) {
-      const stripe = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.18), new THREE.MeshBasicMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.5 }))
-      stripe.rotation.x = -Math.PI / 2; stripe.position.set(-11 + i * 3.2, 0.04, 0); stripe.userData.flow = i; this.scene.add(stripe)
-    }
+    this.field = buildField(this.scene, this.env, [
+      { x: 0, z: 12.5, r: 2.3 }, { x: 0, z: -12.5, r: 2.3 },
+      { x: -4.2, z: 8.5, r: 1.8 }, { x: 4.2, z: 8.5, r: 1.8 }, { x: -4.2, z: -8.5, r: 1.8 }, { x: 4.2, z: -8.5, r: 1.8 },
+    ])
+    this.riverMat = this.field.water
 
     // Crowd — instanced, animated.
-    const crowdGeo = new THREE.BoxGeometry(0.32, 0.55, 0.32)
+    // Each spectator: a rounded body with a head on top.
+    const bodyGeo = new THREE.CapsuleGeometry(0.16, 0.24, 3, 8)
+    const headGeo = new THREE.SphereGeometry(0.12, 10, 8); headGeo.translate(0, 0.33, 0)
+    const crowdGeo = mergeGeometries([bodyGeo, headGeo])!
     const crowdMat = new THREE.MeshStandardMaterial({ roughness: 0.9 })
     this.crowd = new THREE.InstancedMesh(crowdGeo, crowdMat, 420)
     const dummy = new THREE.Object3D()
@@ -141,10 +151,11 @@ export class Engine {
     for (let i = 0; i < 420; i++) {
       const side = i % 2 === 0 ? -1 : 1
       const x = -13 + Math.random() * 26
-      const z = side * (13.5 + Math.random() * 3.5)
+      const row = Math.floor(Math.random() * 3)
+      const z = side * (16.1 + row * 1.3)
       const c = new THREE.Color(palette[i % palette.length])
-      this.crowdData.push({ x, z, phase: Math.random() * Math.PI * 2, c })
-      dummy.position.set(x, 0.6, z); dummy.updateMatrix(); this.crowd.setMatrixAt(i, dummy.matrix)
+      this.crowdData.push({ x, z, y: 1.05 + row * 0.85, phase: Math.random() * Math.PI * 2, c })
+      dummy.position.set(x, 1.05 + row * 0.85, z); dummy.updateMatrix(); this.crowd.setMatrixAt(i, dummy.matrix)
       this.crowd.setColorAt(i, c)
     }
     this.crowd.instanceMatrix.needsUpdate = true
@@ -168,88 +179,87 @@ export class Engine {
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()))
   }
 
+  private bridges: THREE.Group[] = []
+
   private buildArena() {
-    // Turf with worn-earth patches.
-    const turf = new THREE.Mesh(new THREE.PlaneGeometry(26, 30), new THREE.MeshStandardMaterial({ color: 0x4a9e3f, roughness: 0.95 }))
-    turf.rotation.x = -Math.PI / 2; turf.receiveShadow = true; this.scene.add(turf)
-    const patchM = new THREE.MeshStandardMaterial({ color: 0x8a6a3d, roughness: 1 })
-    for (let i = 0; i < 14; i++) {
-      const p = new THREE.Mesh(new THREE.CircleGeometry(0.6 + Math.random() * 0.9, 10), patchM)
-      p.rotation.x = -Math.PI / 2; p.position.set((Math.random() - 0.5) * 22, 0.01, (Math.random() - 0.5) * 26); this.scene.add(p)
-    }
-    // Lane markings
-    const lineM = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 })
+    // Ground, river and curbs come from buildField() (src/arena.ts).
+    // Bridges: sculpted model once loaded, simple planks until then.
     for (const x of [-4.2, 4.2]) {
-      const line = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 28), lineM)
-      line.rotation.x = -Math.PI / 2; line.position.set(x, 0.015, 0); this.scene.add(line)
+      const g = new THREE.Group()
+      g.position.set(x, 0, 0)
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.28, 3.4), new THREE.MeshStandardMaterial({ color: 0x9a7b4f, roughness: 0.85 }))
+      deck.position.y = 0.14; deck.castShadow = true; deck.receiveShadow = true; g.add(deck)
+      this.scene.add(g)
+      this.bridges.push(g)
     }
-    const mid = new THREE.Mesh(new THREE.PlaneGeometry(26, 0.14), lineM)
-    mid.rotation.x = -Math.PI / 2; mid.position.set(0, 0.015, 0); this.scene.add(mid)
-    // Bridges
-    const bridgeM = new THREE.MeshStandardMaterial({ color: 0x9a7b4f, roughness: 0.85 })
-    for (const x of [-4.2, 4.2]) {
-      const b = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.28, 3.4), bridgeM)
-      b.position.set(x, 0.14, 0); b.castShadow = true; b.receiveShadow = true; this.scene.add(b)
-      for (const s of [-1, 1]) {
-        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 3.4), new THREE.MeshStandardMaterial({ color: 0x6b4a1f, roughness: 0.9 }))
-        rail.position.set(x + s * 1.15, 0.5, 0); this.scene.add(rail)
-      }
-    }
-    // Stands
-    const standM = new THREE.MeshStandardMaterial({ color: 0x2a3350, roughness: 0.9 })
+    // Stands behind each end line, three tiers, team-colored seat rows.
+    const standM = new THREE.MeshStandardMaterial({ color: 0x313a55, roughness: 0.9 })
     for (const s of [-1, 1]) {
+      const seatM = new THREE.MeshStandardMaterial({ color: s > 0 ? 0x2f5fd0 : 0xc83a3a, roughness: 0.8 })
       for (let row = 0; row < 3; row++) {
-        const stand = new THREE.Mesh(new THREE.BoxGeometry(30, 1.1, 1.4), standM)
-        stand.position.set(0, 0.55 + row * 1.1, s * (12.5 + row * 1.5)); this.scene.add(stand)
+        const z = s * (16.1 + row * 1.3), h = 0.8 + row * 0.85
+        const stand = new THREE.Mesh(new THREE.BoxGeometry(30, h, 1.3), standM)
+        stand.position.set(0, h / 2, z); stand.receiveShadow = true; this.scene.add(stand)
+        const seats = new THREE.Mesh(new THREE.BoxGeometry(30, 0.12, 0.5), seatM)
+        seats.position.set(0, h + 0.06, z - s * 0.3); this.scene.add(seats)
       }
-      // Floodlight poles + torch lights
+      // Floodlight poles + lamps
       for (const x of [-12, 0, 12]) {
-        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 6, 8), new THREE.MeshStandardMaterial({ color: 0x333a44, roughness: 0.6, metalness: 0.6 }))
-        pole.position.set(x, 3, s * 15.5); this.scene.add(pole)
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 7, 8), new THREE.MeshStandardMaterial({ color: 0x333a44, roughness: 0.6, metalness: 0.6 }))
+        pole.position.set(x, 3.5, s * 19.4); this.scene.add(pole)
         const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), new THREE.MeshBasicMaterial({ color: 0xfff2c0 }))
-        lamp.position.set(x, 6.1, s * 15.5); this.scene.add(lamp)
-        const light = new THREE.PointLight(0xffe9a0, 18, 22); light.position.set(x, 5.8, s * 14); this.scene.add(light)
+        lamp.position.set(x, 7.1, s * 19.4); this.scene.add(lamp)
+        const light = new THREE.PointLight(0xffe9a0, 18, 24); light.position.set(x, 6.8, s * 17); this.scene.add(light)
       }
     }
-    // Centre-line banners
-    for (const s of [-1, 1]) {
-      const banner = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.8), new THREE.MeshStandardMaterial({ color: s < 0 ? 0x2f6df6 : 0xe23b3b, roughness: 0.8, side: THREE.DoubleSide }))
-      banner.position.set(s * 12.6, 2.2, 0); banner.rotation.y = s * Math.PI / 2; this.scene.add(banner)
-    }
+    preloadArena().then(() => this.upgradeProps()).catch(() => {})
   }
 
+  private towerStates: TowerState[] = []
+
   buildTowers(towers: TowerState[]) {
+    this.towerStates = towers
     for (const t of towers) {
       const g = new THREE.Group()
-      const isKing = t.kind === 'king'
-      const h = isKing ? 3.4 : 2.6
-      const col = t.side === 'blue' ? 0x4a6fa5 : 0xa54a4a
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.45, h, 12), new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 }))
-      body.position.y = h / 2; body.castShadow = true; body.receiveShadow = true; g.add(body)
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2
-        const cren = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.45, 0.42), new THREE.MeshStandardMaterial({ color: 0xd8d2c4, roughness: 0.9 }))
-        cren.position.set(Math.cos(a) * 1.05, h + 0.2, Math.sin(a) * 1.05); g.add(cren)
-      }
-      const door = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.1), new THREE.MeshStandardMaterial({ color: 0x2b1d12, roughness: 0.9 }))
-      door.position.set(0, 0.55, t.side === 'blue' ? 1.32 : -1.32); g.add(door)
-      const winM = new THREE.MeshBasicMaterial({ color: 0xffd98a })
-      for (let i = 0; i < 3; i++) {
-        const w = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.42), winM)
-        const a = (i / 3) * Math.PI * 2 + 0.5
-        w.position.set(Math.cos(a) * 1.2, h * 0.6, Math.sin(a) * 1.2); w.lookAt(new THREE.Vector3(Math.cos(a) * 3, h * 0.6, Math.sin(a) * 3)); g.add(w)
-      }
-      if (isKing) {
-        const king = buildKing(t.side); king.position.y = h + 0.35; king.scale.setScalar(0.85); g.add(king)
-        const crownTop = new THREE.Mesh(new THREE.ConeGeometry(0.5, 0.7, 8), new THREE.MeshStandardMaterial({ color: 0xd4af37, roughness: 0.3, metalness: 0.9 }))
-        crownTop.position.y = h + 0.1; g.add(crownTop)
-      } else {
-        const pr = buildPrincess(t.side); pr.position.y = h + 0.1; pr.scale.setScalar(0.8); g.add(pr)
-      }
       g.position.set(t.x, 0, t.z)
       this.scene.add(g)
       this.towerMeshes.set(t.id, g)
+      this.populateTower(g, t)
       this.makeHpBar(t.id, t.side, 1.6, 0.16)
+    }
+  }
+
+  /** Fill a tower's group: the sculpted model when loaded, else the simple fallback. */
+  private populateTower(g: THREE.Group, t: TowerState) {
+    for (const c of [...g.children]) g.remove(c)
+    const isKing = t.kind === 'king'
+    if (arenaReady()) {
+      const model = makeTower(t.kind, t.side, this.env)
+      model.rotation.y = t.side === 'blue' ? Math.PI : 0 // gate and banners face the river
+      g.add(model)
+      const fig = isKing ? buildKing(t.side) : buildPrincess(t.side)
+      fig.position.y = isKing ? TOWER_FLOOR.king : TOWER_FLOOR.princess
+      fig.scale.setScalar(isKing ? 0.85 : 0.8)
+      fig.rotation.y = t.side === 'blue' ? Math.PI : 0
+      g.add(fig)
+      return
+    }
+    const h = isKing ? 3.4 : 2.6
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.45, h, 16), new THREE.MeshStandardMaterial({ color: 0xb8b0a2, roughness: 0.9 }))
+    body.position.y = h / 2; body.castShadow = true; body.receiveShadow = true; g.add(body)
+    const fig = isKing ? buildKing(t.side) : buildPrincess(t.side)
+    fig.position.y = h; fig.scale.setScalar(isKing ? 0.85 : 0.8); g.add(fig)
+  }
+
+  /** Swap in the sculpted towers and bridges once their models have loaded. */
+  private upgradeProps() {
+    for (const t of this.towerStates) {
+      const g = this.towerMeshes.get(t.id)
+      if (g) this.populateTower(g, t)
+    }
+    for (const b of this.bridges) {
+      for (const c of [...b.children]) b.remove(c)
+      b.add(makeBridge(this.env))
     }
   }
 
@@ -501,9 +511,8 @@ export class Engine {
     this.time += dt
     const t = this.time
     // River flow
-    this.riverMat.color.setHSL(0.58, 0.75, 0.45 + Math.sin(t * 1.4) * 0.04)
+    this.field?.update(t)
     for (const child of this.scene.children) {
-      if (child.userData.flow !== undefined) { child.position.x += dt * 0.9; if (child.position.x > 13) child.position.x = -13 }
       if (child.userData.shock !== undefined) {
         child.userData.shock += dt * 2.4
         const s = 1 + child.userData.shock * 3.2
@@ -517,7 +526,7 @@ export class Engine {
     const dummy = new THREE.Object3D()
     for (let i = 0; i < this.crowdData.length; i++) {
       const c = this.crowdData[i]
-      dummy.position.set(c.x, 0.6 + Math.abs(Math.sin(t * 3 + c.phase)) * 0.22, c.z)
+      dummy.position.set(c.x, c.y + Math.abs(Math.sin(t * 3 + c.phase)) * 0.22, c.z)
       dummy.updateMatrix(); this.crowd.setMatrixAt(i, dummy.matrix)
     }
     this.crowd.instanceMatrix.needsUpdate = true
