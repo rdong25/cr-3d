@@ -9,6 +9,8 @@ the browser (`localStorage`).
 > character models, names in the code, and art are original creations built
 > from Three.js geometry — no game assets were copied.
 
+**Play it:** <https://rdong25.github.io/cr-3d/> (works on phones; on iPhone, Share → Add to Home Screen for full-screen). Every push to `main` redeploys via GitHub Actions.
+
 ## Run it
 
 ```bash

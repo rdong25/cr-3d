@@ -291,6 +291,10 @@ export class Engine {
     const h = this.container.clientHeight || window.innerHeight
     this.renderer.setSize(w, h)
     this.camera.aspect = w / h
+    // Portrait phones: widen the vertical FOV so the arena's width (both lanes)
+    // still fits, instead of cropping to the middle.
+    const aspect = w / h
+    this.camera.fov = aspect >= 1 ? 55 : Math.min(80, THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(22)) / aspect)))
     this.camera.updateProjectionMatrix()
   }
 
