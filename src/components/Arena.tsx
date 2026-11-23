@@ -92,6 +92,7 @@ const Arena = forwardRef<ArenaHandle, Props>(function Arena({ profile, mode, act
       onTroopRemove: (id: number) => { engine?.removeTroop(id) },
       onFireball: (x: number, z: number) => { engine?.fireball(x, z); sfx.explosion() },
       onShot: (shot) => { engine?.spawnShot(shot) },
+      onAttackStart: (t, target, windup) => { engine?.attackStart(t, target.x, target.z, windup) },
       onEnd: (rec: MatchRecord) => { cbRef.current.onEnd(rec) },
       onBanner: (text: string, sub?: string) => { cbRef.current.onBanner(text, sub) }
     }

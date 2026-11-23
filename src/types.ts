@@ -68,6 +68,8 @@ export interface TroopState {
   walkPhase: number
   flying: boolean
   dead: boolean
+  /** True from the moment an attack is announced (wind-up) until it lands. */
+  swinging?: boolean
 }
 
 export interface TowerState {

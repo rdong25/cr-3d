@@ -142,8 +142,8 @@ export const CLIPS = [
     }),
   },
   {
-    // Shoulder, fire, recoil, recover. The game starts this clip at 0.12 s, the
-    // instant the shot leaves, so that frame is the trigger pull.
+    // Shoulder, steady, fire, recoil, recover. The shot leaves at 0.38 s: the
+    // game starts this clip a wind-up early so that frame lands on the hit.
     name: 'Attack', duration: 0.9, loop: false,
     pose: withGun((() => {
       const ready = { ...stance(0), ...PORT }
@@ -156,12 +156,14 @@ export const CLIPS = [
       })
       const settle = layer(aim, { propDir: [0, 0.04, 0], chest: [-0.02, 0, 0] })
       const fast = (t) => 1 - Math.pow(1 - t, 3)
+      const steady = layer(aim, { propDir: [0, -0.015, 0], head: [0.02, 0, 0] })
       return keyed([
         { t: 0, pose: ready },
-        { t: 0.115, pose: aim, ease: fast },
-        { t: 0.17, pose: kick, ease: fast },
-        { t: 0.36, pose: settle },
-        { t: 0.62, pose: aim },
+        { t: 0.26, pose: aim },
+        { t: 0.38, pose: steady },
+        { t: 0.43, pose: kick, ease: fast },
+        { t: 0.6, pose: settle },
+        { t: 0.72, pose: aim },
         { t: 0.9, pose: ready },
       ])
     })()),

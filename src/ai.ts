@@ -29,6 +29,23 @@ export class RivalAI {
     this.name = rival?.name ?? 'Vex'
     this.level = Math.max(1, Math.min(13, 5 + Math.floor((profile.trophies - 1000) / 220)))
     this.deck = ['knight', 'archers', 'giant', 'musketeer', 'minions', 'bomber', 'prince', 'dragon']
+    // Same rules as the player: shuffle, hold four, the rest wait in order.
+    const shuffled = [...this.deck].sort(() => Math.random() - 0.5)
+    this.hand = shuffled.slice(0, 4)
+    this.queue = shuffled.slice(4)
+  }
+
+  /** The four cards the AI may play right now. */
+  hand: CardId[] = []
+  /** Cards waiting to be drawn, next first. */
+  private queue: CardId[] = []
+
+  /** Called once a card has actually been deployed: it goes to the back of the queue and the next card is drawn. */
+  played(cardId: CardId) {
+    const i = this.hand.indexOf(cardId)
+    if (i < 0) return
+    this.hand[i] = this.queue.shift() ?? cardId
+    this.queue.push(cardId)
   }
 
   /**
@@ -44,13 +61,15 @@ export class RivalAI {
     this.timer += dt
     if (this.timer < 0.8) return null
     this.timer = 0
+    // Only cards in hand can be played, so no card repeats until four others have gone.
     const pick = (ok: (c: CardId) => boolean): CardId | null => {
-      const options = this.deck.filter((c) => ok(c) && CARDS[c].cost <= this.elixir)
+      const options = this.hand.filter((c) => ok(c) && CARDS[c].cost <= this.elixir)
       return options.length ? options[Math.floor(Math.random() * options.length)] : null
     }
     // Defend: answer troops heading for our towers, in their lane and path.
     if (threat && threat.level >= 0.6) {
-      const cardId = pick((c) => CARDS[c].cost <= 4)
+      // Prefer a cheap answer; if the hand has none, defend with whatever it can afford.
+      const cardId = pick((c) => CARDS[c].cost <= 4) ?? pick(() => true)
       if (cardId) {
         const lane: -1 | 1 = threat.x < 0 ? -1 : 1
         const x = Math.max(-9, Math.min(9, threat.x))

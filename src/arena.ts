@@ -5,7 +5,7 @@ import type { Side } from './types'
 import { TEAM_COLORS } from './hero'
 import { pbrSet, splatGround, triplanarPBR } from './pbr'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { Water } from 'three/examples/jsm/objects/Water.js'
+import { Water as RefractiveWater } from 'three/examples/jsm/objects/Water2.js'
 
 /** Deeper, less toy-like team colors for cloth and roofs in the arena. */
 const ARENA_TEAM: Record<Side, number> = { blue: 0x24407e, red: 0x7e1c1c }
@@ -127,12 +127,12 @@ function groundMask(towers: { x: number; z: number; r: number }[]) {
   }, 5, false)
 }
 /** Tileable ripple normal map for the river. */
-const waterNormals = () => once('waterN', () => canvasTex(256, 256, (g, r) => {
+const waterNormals = (variant = 0) => once(`waterN${variant}`, () => canvasTex(256, 256, (g, r) => {
   const img = g.createImageData(256, 256)
   const hgt = (x: number, y: number) => {
     let v = 0
     for (let k = 0; k < 5; k++) {
-      const fx = (k + 1) * 2, fy = (k + 2) * 1.5, ph = k * 1.7
+      const fx = (k + 1) * 2 + variant, fy = (k + 2) * 1.5 + variant, ph = k * 1.7 + variant * 2.3
       v += Math.sin((x / 256) * Math.PI * 2 * fx + Math.sin((y / 256) * Math.PI * 2 * (k + 1)) * 1.3 + ph) * Math.cos((y / 256) * Math.PI * 2 * fy + ph) / (k + 1)
     }
     return v
@@ -145,7 +145,7 @@ const waterNormals = () => once('waterN', () => canvasTex(256, 256, (g, r) => {
   }
   g.putImageData(img, 0, 0)
   void r
-}, 3, false))
+}, 3 + variant, false))
 
 export interface Field { water: THREE.Material; update(t: number): void }
 
@@ -243,8 +243,20 @@ export function buildField(scene: THREE.Scene, env: THREE.Texture | null, towers
   const stone = new THREE.MeshStandardMaterial({ color: 0xc8c2b8, roughness: 1, envMap: env, envMapIntensity: 0.5 })
   triplanarPBR(stone, pbrSet('rock'), 1.6)
   // River bed + water surface.
-  const bed = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.3, 2.6), new THREE.MeshStandardMaterial({ color: 0x0f2a33, roughness: 1 }))
-  bed.position.set(0, -0.32, 0); scene.add(bed)
+  // Riverbed: stony ground the water refracts, with a scatter of rocks.
+  const bedMat = new THREE.MeshStandardMaterial({ color: 0xa3ac96, roughness: 1 })
+  triplanarPBR(bedMat, pbrSet('dirt'), 1.8)
+  const bed = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.3, 2.6), bedMat)
+  bed.position.set(0, -0.6, 0); bed.receiveShadow = true; scene.add(bed)
+  const bedRockMat = new THREE.MeshStandardMaterial({ color: 0x77756c, roughness: 0.9, flatShading: true })
+  const bedRocks = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), bedRockMat, 70)
+  const rr = rng(19), rm = new THREE.Matrix4(), rq = new THREE.Quaternion(), rs = new THREE.Vector3()
+  for (let i = 0; i < 70; i++) {
+    const k = 0.06 + rr() ** 2 * 0.2
+    rm.compose(new THREE.Vector3((rr() - 0.5) * FIELD_W, -0.45 + k * 0.3, (rr() - 0.5) * 2.2), rq.setFromEuler(new THREE.Euler(rr() * 3, rr() * 3, rr() * 3)), rs.set(k * (1 + rr()), k * 0.6, k))
+    bedRocks.setMatrixAt(i, rm)
+  }
+  bedRocks.receiveShadow = true; scene.add(bedRocks)
   const n = waterNormals()
   let water: THREE.Material
   let tickWater: (t: number) => void
@@ -257,24 +269,30 @@ export function buildField(scene: THREE.Scene, env: THREE.Texture | null, towers
     water = m
     tickWater = (t) => n.offset.set(t * 0.035, Math.sin(t * 0.4) * 0.02)
   } else {
-    // Desktop: a planar reflection of the live scene (towers, bridges, troops,
-    // explosions), rippled by the normal map, with a sun glint.
-    const w = new Water(new THREE.PlaneGeometry(FIELD_W, 2.6), {
-      textureWidth: 512, textureHeight: 512, waterNormals: n,
-      sunDirection: new THREE.Vector3(-20, 18, 8).normalize(), sunColor: 0xffcfa0, waterColor: 0x0d2f38, distortionScale: 0.9, fog: true,
+    // Desktop: the river both REFLECTS the live scene (towers, bridges, troops,
+    // explosions) and REFRACTS the stony bed beneath it, blended by viewing
+    // angle (Fresnel) and rippled by two flowing normal maps.
+    const n1 = waterNormals(1)
+    const w = new RefractiveWater(new THREE.PlaneGeometry(FIELD_W, 2.6), {
+      color: 0xa6dbe2, scale: 2.2, flowDirection: new THREE.Vector2(1, 0.12), flowSpeed: 0.04,
+      textureWidth: 768, textureHeight: 512, reflectivity: 0.22, normalMap0: n, normalMap1: n1,
     })
     w.rotation.x = -Math.PI / 2; w.position.y = -0.06
-    w.material.uniforms.size.value = 2.2
-    // The stock shader mirrors the bright sky almost fully; keep the river dark and moody.
-    w.material.fragmentShader = w.material.fragmentShader.replace('reflectionSample * 0.9', 'reflectionSample * 0.5')
+    // The stock distortion (0.05) tears the bank edges into streaks on a river this narrow.
+    const wm = w.material as THREE.ShaderMaterial
+    wm.fragmentShader = wm.fragmentShader.replace('normal.xz * 0.05', 'normal.xz * 0.016')
+    // The reflection and refraction are extra renders of the scene; skip them
+    // while a post pass re-draws the scene with an override material (AO normals).
+    const render = w.onBeforeRender
+    w.onBeforeRender = function (renderer, sc, cam, ...rest) { if (sc.overrideMaterial) return; render.call(this, renderer, sc, cam, ...rest) }
     scene.add(w)
-    water = w.material
-    tickWater = (t) => { w.material.uniforms.time.value = t * 0.45 }
+    water = w.material as THREE.Material
+    tickWater = () => {}
   }
   // Stone banks along both edges of the river.
   for (const s of [-1, 1]) {
-    const bank = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.34, 0.32), stone)
-    bank.position.set(0, -0.05, s * 1.36); bank.castShadow = true; bank.receiveShadow = true; scene.add(bank)
+    const bank = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.72, 0.32), stone)
+    bank.position.set(0, -0.24, s * 1.36); bank.castShadow = true; bank.receiveShadow = true; scene.add(bank)
   }
   // Packed earth beyond the field, so the arena doesn't float in the sky.
   const dirt = pbrSet('dirt'), outerMap = dirt.color.clone(), outerN = dirt.normal.clone()

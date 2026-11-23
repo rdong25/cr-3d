@@ -150,7 +150,11 @@ export class HeroInstance {
   private glowMat: THREE.MeshStandardMaterial | undefined
   dead = false
 
+  /** When in the Attack clip the hit lands (seconds). Keep in sync with tools/<hero>/animations.mjs. */
+  private strikeAt = 0.38
+
   constructor(side: Side, cardId: HeroCardId = 'knight') {
+    if (cardId === 'giant') this.strikeAt = 0.55
     const asset = assets.get(cardId)
     if (!asset) throw new Error(`preloadHero('${cardId}') must resolve before creating heroes`)
     // SkeletonUtils.clone re-binds the cloned meshes to the cloned bones —
@@ -211,14 +215,18 @@ export class HeroInstance {
     }
   }
 
-  /** Swing once. Skipping into the clip puts the hit frame right after the game applies damage. */
-  attack() {
+  /**
+   * Play the Attack clip so its strike frame lands `windup` seconds from now
+   * (the game announces attacks that far ahead). With no argument the whole
+   * clip plays from the start.
+   */
+  attack(windup = this.strikeAt) {
     if (this.dead) return
     this.attacking = true
     const a = this.actions.get('Attack')!
     if (this.current === a) a.reset().play()
-    else this.fadeTo('Attack', 0.06)
-    a.time = 0.12
+    else this.fadeTo('Attack', 0.08)
+    a.time = Math.max(0, this.strikeAt - windup)
   }
 
   /** Play the death clip; returns its length in seconds. */

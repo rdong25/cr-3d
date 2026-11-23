@@ -16,11 +16,19 @@ export interface GameEvents {
   onFireball: (x: number, z: number) => void
   /** A ranged attacker fired: the engine flies a visible projectile. Damage is applied instantly by the game; the shot is the visual. */
   onShot: (shot: Shot) => void
+  /** A troop commits to an attack that will land in `windup` seconds: time to start its swing / aim. */
+  onAttackStart?: (t: TroopState, target: { x: number; z: number }, windup: number) => void
   onEnd: (r: MatchRecord) => void
   onBanner: (text: string, sub?: string) => void
 }
 
 let nextId = 1
+
+/**
+ * Seconds between a troop committing to an attack and the hit landing. Matches
+ * the strike frame of each troop's Attack clip (the Giant's pound is slower).
+ */
+export const windupOf = (cardId: CardId): number => (cardId === 'giant' ? 0.55 : 0.38)
 
 export class Game {
   profile: Profile
@@ -263,13 +271,14 @@ export class Game {
     if (this.aiTimer > 0.5) {
       this.aiTimer = 0
       const dec = this.ai.update(0.5, this.threatTo('red'), this.troops.filter((t) => t.side === 'red').length, 10, rate)
-      if (dec) this.deploy(dec.cardId, 'red', dec.x, dec.z, dec.lane)
+      if (dec && this.deploy(dec.cardId, 'red', dec.x, dec.z, dec.lane)) this.ai.played(dec.cardId)
       if (this.mode === 'spectate' && this.spectateAI) {
         const decB = this.spectateAI.update(0.5, this.threatTo('blue'), this.troops.filter((t) => t.side === 'blue').length, 10, rate)
         if (decB && this.spectateAI.elixir >= CARDS[decB.cardId].cost) {
           // Spectate blue AI deploys on blue side, bypassing player elixir.
           const def = CARDS[decB.cardId]
           this.spectateAI.elixir -= def.cost
+          this.spectateAI.played(decB.cardId)
           for (let i = 0; i < def.count; i++) {
             const t: TroopState = { id: nextId++, cardId: decB.cardId, side: 'blue', x: -decB.x + (i - (def.count - 1) / 2) * 0.9, z: -decB.z, lane: decB.lane, hp: def.hp, maxHp: def.hp, targetId: null, attackCd: 0, walkPhase: Math.random() * 6, flying: !!def.flying, dead: false }
             this.troops.push(t); this.events.onTroopAdd(t)
@@ -307,8 +316,21 @@ export class Game {
       }
       const inRangeTroop = target && best <= def.range
       const inRangeTower = towerTarget && bestT <= def.range + 0.8
+      // Attacks are announced a wind-up before they land, so the swing or aim
+      // can play out and connect on the hit. Losing the target cancels it.
+      const engaged = inRangeTroop && target ? target : inRangeTower && towerTarget ? towerTarget : null
+      let strike = false
+      if (engaged) {
+        const wind = windupOf(t.cardId)
+        if (!t.swinging && t.attackCd <= wind) {
+          t.swinging = true
+          t.attackCd = wind
+          this.events.onAttackStart?.(t, engaged, wind)
+        }
+        if (t.swinging && t.attackCd <= 0) { strike = true; t.swinging = false }
+      } else t.swinging = false
       if (inRangeTroop && target) {
-        if (t.attackCd <= 0) {
+        if (strike) {
           t.attackCd = def.hitSpeed
           const dmg = def.damage * (t.side === 'red' ? this.ai.damageMultiplier() : 1)
           // Prince charge: double damage on the first hit after a run-up.
@@ -322,7 +344,7 @@ export class Game {
           if (target.hp <= 0) this.kill(target)
         }
       } else if (inRangeTower && towerTarget) {
-        if (t.attackCd <= 0) {
+        if (strike) {
           t.attackCd = def.hitSpeed
           this.damageTower(towerTarget, def.damage * (t.side === 'red' ? this.ai.damageMultiplier() : 1))
           sfx.hit()

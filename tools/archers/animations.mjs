@@ -144,8 +144,8 @@ export const CLIPS = [
     }),
   },
   {
-    // Draw, loose, follow through, lower. The game starts this clip at 0.12 s,
-    // the instant the arrow leaves, so that frame is the release.
+    // Raise, draw, hold, loose, follow through, lower. The arrow leaves at
+    // 0.38 s: the game starts this clip a wind-up early so that frame lands on the hit.
     name: 'Attack', duration: 0.9, loop: false,
     pose: withBow((() => {
       const ready = { ...stance(0), ...LOW }
@@ -157,11 +157,15 @@ export const CLIPS = [
       })
       const hold = layer(drawn, { supportAt: [-0.14, -0.02, -0.08], propUp: [0, 0, 0.12] })
       const fast = (t) => 1 - Math.pow(1 - t, 3)
+      // Bow up, string hand still forward on the string: the start of the draw.
+      const nocked = layer(drawn, { supportAt: [0.4, -0.08, 0.18], propGrip: [-0.03, 0, -0.02], chest: [0, 0.08, 0] })
       return keyed([
         { t: 0, pose: ready },
-        { t: 0.115, pose: drawn, ease: fast },
-        { t: 0.2, pose: loose, ease: fast },
-        { t: 0.5, pose: hold },
+        { t: 0.14, pose: nocked },
+        { t: 0.32, pose: drawn },
+        { t: 0.38, pose: drawn },
+        { t: 0.44, pose: loose, ease: fast },
+        { t: 0.62, pose: hold },
         { t: 0.9, pose: ready },
       ])
     })()),

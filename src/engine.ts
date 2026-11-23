@@ -447,14 +447,23 @@ export class Engine {
   /** Run `fn` after `delay` seconds of game time. */
   private later(delay: number, fn: () => void) { this.pending.push({ t: delay, fn }) }
 
-  /** A melee troop swings: time the effect to the strike frame of its Attack clip. */
-  private meleeFx(tr: TroopState, yaw: number) {
-    const def = CARDS[tr.cardId]
-    if (def.range > 1.5) return
-    const x = tr.x, z = tr.z, side = tr.side
-    if (tr.cardId === 'giant') this.later(0.3, () => this.vfx.slam(x + Math.sin(yaw) * 1.3, z + Math.cos(yaw) * 1.3, 1.2))
-    else if (tr.cardId === 'prince') this.later(0.22, () => { this.vfx.slash(x, z, yaw, side, 1.35); this.vfx.slam(x + Math.sin(yaw) * 1.2, z + Math.cos(yaw) * 1.2, 0.6) })
-    else this.later(0.22, () => this.vfx.slash(x, z, yaw, side, tr.cardId === 'knight' ? 1.1 : 0.75))
+  /**
+   * The game announces an attack `windup` seconds before it lands: turn to the
+   * target, start the Attack clip so its strike frame meets the hit, and time
+   * the melee effect to that same moment.
+   */
+  attackStart(tr: TroopState, tx: number, tz: number, windup: number) {
+    const h = this.heroes.get(tr.id)
+    if (!h) return
+    const yaw = Math.atan2(tx - tr.x, tz - tr.z)
+    h.yaw = yaw
+    h.hero.attack(windup)
+    if (CARDS[tr.cardId].range > 1.5) return // ranged: the projectile is the effect
+    const x = tr.x, z = tr.z, side = tr.side, id = tr.id
+    const still = () => this.heroes.has(id) // skip the effect if it died mid-swing
+    if (tr.cardId === 'giant') this.later(windup, () => { if (still()) this.vfx.slam(x + Math.sin(yaw) * 1.3, z + Math.cos(yaw) * 1.3, 1.2) })
+    else if (tr.cardId === 'prince') this.later(windup, () => { if (still()) { this.vfx.slash(x, z, yaw, side, 1.35); this.vfx.slam(x + Math.sin(yaw) * 1.2, z + Math.cos(yaw) * 1.2, 0.6) } })
+    else this.later(Math.max(0, windup - 0.05), () => { if (still()) this.vfx.slash(x, z, yaw, side, tr.cardId === 'knight' ? 1.1 : 0.75) })
   }
 
   /** Turn an HP drop into a hit effect; rapid small drops are merged into one number. */
@@ -730,7 +739,6 @@ export class Engine {
       h.hero.group.rotation.y = h.yaw
       h.hero.setSpeed(speed)
       // game.ts resets attackCd to 1 on the frame a hit lands.
-      if (tr.attackCd > h.cd + 0.5) { h.hero.attack(); this.meleeFx(tr, h.yaw) }
       if (tr.cardId === 'prince' && speed > 1 && Math.random() < dt * 14) this.vfx.footDust(tr.x, tr.z)
       this.hpDrop(tr.id, tr.hp, tr.x, h.flying ? 2.0 : 1.0, tr.z, tr.side, false, dt)
       h.cd = tr.attackCd
