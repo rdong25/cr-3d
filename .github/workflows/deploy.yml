@@ -26,7 +26,12 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Bake the commit into the bundle and publish it as version.json, so
+      # installed copies can tell they're out of date (src/updater.ts).
       - run: npm run build
+        env:
+          VITE_BUILD_ID: ${{ github.sha }}
+      - run: echo "{\"id\":\"${{ github.sha }}\"}" > dist/version.json
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Arena, { type ArenaHandle, type Snapshot } from './components/Arena'
 import Lobby from './components/Lobby'
 import DeckBuilder from './components/DeckBuilder'
@@ -7,6 +7,7 @@ import History from './components/History'
 import Hud from './components/Hud'
 import { loadProfile, saveProfile, resetProfile } from './storage'
 import { setSoundEnabled } from './sound'
+import { BUILD_ID, fetchLatestId, reloadTo, shortId, watchForUpdates } from './updater'
 import type { CameraMode, CardId, MatchRecord, Profile } from './types'
 
 type Screen = 'lobby' | 'deck' | 'ladder' | 'history' | 'battle'
@@ -25,6 +26,18 @@ export default function App() {
   const [emotes, setEmotes] = useState<string[]>([])
   const [result, setResult] = useState<MatchRecord | null>(null)
   const [sound, setSound] = useState(true)
+  // Auto-update: a newer deploy reloads the app, but never mid-match.
+  const [pendingUpdate, setPendingUpdate] = useState<string | null>(null)
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null)
+  useEffect(() => watchForUpdates(setPendingUpdate), [])
+  useEffect(() => { if (pendingUpdate && screen !== 'battle') reloadTo(pendingUpdate) }, [pendingUpdate, screen])
+  const checkForUpdate = async () => {
+    setUpdateStatus('Checking…')
+    const latest = await fetchLatestId()
+    if (latest && latest !== BUILD_ID) { setUpdateStatus('Updating…'); reloadTo(latest); return }
+    setUpdateStatus(latest ? '✓ Up to date' : 'Couldn’t reach server')
+    setTimeout(() => setUpdateStatus(null), 2500)
+  }
   const arenaRef = useRef<ArenaHandle>(null)
   const bannerTimer = useRef<number | undefined>(undefined)
 
@@ -147,6 +160,13 @@ export default function App() {
             </div>
           </div>
         )}
+        {screen === 'lobby' && (
+          <div id="versionBar">
+            <span>Version {shortId(BUILD_ID)}</span>
+            <button className="btn ghost small" onClick={checkForUpdate} disabled={updateStatus === 'Checking…'}>{updateStatus ?? '🔄 Update'}</button>
+          </div>
+        )}
+        {screen === 'battle' && pendingUpdate && <div id="updatePill">⬆️ New version ready: it installs when you return to the lobby</div>}
         {screen !== 'battle' && <button
           className="btn ghost small"
           onClick={toggleSound}
