@@ -332,7 +332,21 @@ export class Game {
         // Move toward the nearest enemy troop within sight range (5.5), else toward the tower.
         const dest = target && best <= 5.5 ? target : towerTarget
         if (dest) {
-          const dx = dest.x - t.x; const dz = dest.z - t.z
+          // Ground troops cross the river only at their lane's bridge
+          // (bridges at x = ±4.2, river z in [-1.3, 1.3]); flying troops fly
+          // straight over the water.
+          let destX = dest.x, destZ = dest.z
+          if (!t.flying && Math.sign(t.z) !== Math.sign(dest.z) && dest.z !== 0) {
+            const bx = t.lane * 4.2
+            if (Math.abs(t.z) > 1.8 || Math.abs(t.x - bx) > 0.4) {
+              // Walk along your own bank to the bridge entrance first.
+              destX = bx; destZ = Math.sign(t.z) * 1.8
+            } else {
+              // On the bridge: walk straight across to the far bank.
+              destX = bx; destZ = Math.sign(dest.z) * 1.8
+            }
+          }
+          const dx = destX - t.x; const dz = destZ - t.z
           const d = Math.hypot(dx, dz) || 1
           const step = def.speed * dt
           t.x += (dx / d) * step; t.z += (dz / d) * step

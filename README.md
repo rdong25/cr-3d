@@ -42,7 +42,8 @@ Requires Node 18+.
   per-card hit speeds — Knight 1.1s, Archers 0.9s, Giant 1.5s, Musketeer
   1.1s, Minions 1.0s, Bomber 1.9s, Prince 1.4s, Skeletons 1.0s, Baby Dragon
   1.6s. Troops only chase enemies within sight range (5.5); otherwise they
-  walk to the tower. Splash hits every enemy in the blast radius for full
+  walk to the tower. Ground troops cross the river only at their lane's
+  bridge; flying troops fly straight over the water. Splash hits every enemy in the blast radius for full
   damage; Prince charges for double damage.
 - **Rival AI** that defends when threatened, pushes when elixir is high, and
   levels up as your trophies grow.
