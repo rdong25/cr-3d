@@ -18,33 +18,82 @@ const NO_DISSOLVE = { value: 0 }
 //   - optional emissive "Warden_Glow" material
 
 /** One generated .glb per troop (Fireball is a spell — no hero). */
-export const HERO_URLS: Record<Exclude<CardId, 'fireball'>, string> = {
-  knight: `${import.meta.env.BASE_URL}models/ember-warden.glb`,
-  giant: `${import.meta.env.BASE_URL}models/giant.glb`,
-  prince: `${import.meta.env.BASE_URL}models/prince.glb`,
-  archers: `${import.meta.env.BASE_URL}models/archers.glb`,
-  musketeer: `${import.meta.env.BASE_URL}models/musketeer.glb`,
-  bomber: `${import.meta.env.BASE_URL}models/bomber.glb`,
-  skeletons: `${import.meta.env.BASE_URL}models/skeletons.glb`,
-  minions: `${import.meta.env.BASE_URL}models/minions.glb`,
-  dragon: `${import.meta.env.BASE_URL}models/dragon.glb`,
-}
-export type HeroCardId = keyof typeof HERO_URLS
-export const HERO_CARDS = Object.keys(HERO_URLS) as HeroCardId[]
+const HERO_FILES = {
+  knight: 'ember-warden', giant: 'giant', prince: 'prince', archers: 'archers', musketeer: 'musketeer',
+  bomber: 'bomber', skeletons: 'skeletons', minions: 'minions', dragon: 'dragon',
+} satisfies Record<Exclude<CardId, 'fireball'>, string>
+export type HeroCardId = keyof typeof HERO_FILES
+export const HERO_CARDS = Object.keys(HERO_FILES) as HeroCardId[]
+/**
+ * Heroes that have been through the Blender bake (tools/blender): same mesh, skeleton and clips,
+ * plus normal / color / roughness-metal textures in models/baked/. The vertex-painted originals
+ * stay in models/ and are used with ?q=low or ?painted=1 (lighter to download and to draw).
+ */
+const BAKED: ReadonlySet<HeroCardId> = new Set<HeroCardId>(HERO_CARDS)
+const query = new URLSearchParams(location.search)
+const PAINTED_ONLY = query.get('q') === 'low' || query.has('painted')
+const paintedUrl = (id: HeroCardId) => `${import.meta.env.BASE_URL}models/${HERO_FILES[id]}.glb`
+export const HERO_URLS = Object.fromEntries(HERO_CARDS.map((id) =>
+  [id, !PAINTED_ONLY && BAKED.has(id) ? `${import.meta.env.BASE_URL}models/baked/${HERO_FILES[id]}.glb` : paintedUrl(id)])) as Record<HeroCardId, string>
 export const isHeroCard = (id: CardId): id is HeroCardId => id in HERO_URLS
 export const TEAM_COLORS: Record<Side, number> = { blue: 0x2f6df6, red: 0xe23b3b }
 /** Ground distance covered by one Walk cycle at timeScale 1 (keeps feet from sliding). */
 const WALK_SPEED_AT_1X = 1.15
 
-interface Asset { scene: THREE.Group; clips: Map<string, THREE.AnimationClip> }
+/** Where a soft halo sprite goes: on which bone, where in that bone's space, and how big. */
+interface GlowSpot { bone: string; pos: THREE.Vector3; out: THREE.Vector3; w: number; h: number }
+interface Asset { scene: THREE.Group; clips: Map<string, THREE.AnimationClip>; glow: GlowSpot[] }
+
+/**
+ * Finds the glowing parts of a model (eyes, gems, a lit fuse) so each gets a halo exactly where
+ * it is, whatever the character's proportions: one spot per bone that carries glow geometry,
+ * sized to that geometry and pushed out to its front surface.
+ */
+function findGlowSpots(scene: THREE.Group): GlowSpot[] {
+  const spots: GlowSpot[] = []
+  scene.traverse((o) => {
+    const mesh = o as THREE.SkinnedMesh
+    if (!mesh.isSkinnedMesh || (mesh.material as THREE.Material).name !== 'Warden_Glow') return
+    const pos = mesh.geometry.getAttribute('position'), nrm = mesh.geometry.getAttribute('normal'), skin = mesh.geometry.getAttribute('skinIndex')
+    const byBone = new Map<number, { box: THREE.Box3; n: THREE.Vector3 }>()
+    const p = new THREE.Vector3(), n = new THREE.Vector3()
+    for (let i = 0; i < pos.count; i++) {
+      const b = skin.getX(i)
+      let e = byBone.get(b)
+      if (!e) { e = { box: new THREE.Box3(), n: new THREE.Vector3() }; byBone.set(b, e) }
+      e.box.expandByPoint(p.fromBufferAttribute(pos, i))
+      e.n.add(n.fromBufferAttribute(nrm, i))
+    }
+    for (const [b, e] of byBone) {
+      const size = e.box.getSize(new THREE.Vector3())
+      // Long glowing strips (sword runes) would need a halo the size of the weapon; bloom covers those.
+      if (Math.max(size.x, size.y, size.z) > 0.36) continue
+      const center = e.box.getCenter(new THREE.Vector3())
+      // Mostly-outward average normal = the side the glow shows on; a closed blob averages to ~0.
+      const out = e.n.lengthSq() > 1e-6 ? e.n.normalize() : new THREE.Vector3(0, 0, 1)
+      if (out.z < 0.2 && Math.abs(out.y) < 0.6) out.set(0, 0, 1)
+      center.addScaledVector(out, 0.5 * (Math.abs(out.x) * size.x + Math.abs(out.y) * size.y + Math.abs(out.z) * size.z) + 0.01)
+      spots.push({
+        bone: mesh.skeleton.bones[b].name, pos: center.applyMatrix4(mesh.skeleton.boneInverses[b]),
+        out: out.clone().transformDirection(mesh.skeleton.boneInverses[b]),
+        w: Math.max(size.x, size.z) * 1.3 + 0.05, h: size.y * 1.3 + 0.07,
+      })
+    }
+  })
+  return spots
+}
 const assets = new Map<HeroCardId, Asset>()
 const loading = new Map<HeroCardId, Promise<Asset>>()
 
 export function preloadHero(cardId: HeroCardId = 'knight'): Promise<Asset> {
   const existing = loading.get(cardId)
   if (existing) return existing
-  const p = new GLTFLoader().loadAsync(HERO_URLS[cardId]).then((gltf) => {
-    const asset = { scene: gltf.scene, clips: new Map(gltf.animations.map((c) => [c.name, c])) }
+  // A baked model that fails to load falls back on the painted one before giving up.
+  const p = new GLTFLoader().loadAsync(HERO_URLS[cardId]).catch((err) => {
+    if (HERO_URLS[cardId] === paintedUrl(cardId)) throw err
+    return new GLTFLoader().loadAsync(paintedUrl(cardId))
+  }).then((gltf) => {
+    const asset = { scene: gltf.scene, clips: new Map(gltf.animations.map((c) => [c.name, c])), glow: findGlowSpots(gltf.scene) }
     assets.set(cardId, asset)
     return asset
   })
@@ -76,9 +125,12 @@ function materialsFor(side: Side, cardId: HeroCardId): Map<string, THREE.MeshSta
     c.envMap = envMap
     c.envMapIntensity = c.name === 'Warden_Metal' ? 1.1 : 0.6
     // Scanned detail over the baked colors: worn steel, leather grain, linen weave.
-    if (c.name === 'Warden_Metal') heroSurface(c, pbrSet('armor'), 0.9, NO_DISSOLVE, { wear: 0.85, normalStrength: 1.2 })
-    else if (c.name === 'Warden_Soft') heroSurface(c, pbrSet('leather'), 0.45, NO_DISSOLVE, { wear: 0.6, normalStrength: 0.9 })
-    else if (c.name === 'Warden_Team') heroSurface(c, pbrSet('linen'), 0.35, NO_DISSOLVE, { wear: 0.5, normalStrength: 1.1 })
+    // A model baked in Blender already carries wear, grain and dents in its own textures, so
+    // the scanned detail only adds a fine tooth on top.
+    const k = c.normalMap ? 0.45 : 1
+    if (c.name === 'Warden_Metal') heroSurface(c, pbrSet('armor'), 0.9, NO_DISSOLVE, { wear: 0.85 * k, normalStrength: 1.2 * k })
+    else if (c.name === 'Warden_Soft') heroSurface(c, pbrSet('leather'), 0.45, NO_DISSOLVE, { wear: 0.6 * k, normalStrength: 0.9 * k })
+    else if (c.name === 'Warden_Team') heroSurface(c, pbrSet('linen'), 0.35, NO_DISSOLVE, { wear: 0.5 * k, normalStrength: 1.1 * k })
     else heroSurface(c, null, 1, NO_DISSOLVE)
     set!.set(c.name, c)
   })
@@ -172,11 +224,23 @@ export class HeroInstance {
     this.glowMat = mats.get('Warden_Glow')
     this.group.add(model)
     this.head = model.getObjectByName('head')!
-    // Only heroes with a glow material get the eye/chest halos — Archers and
-    // Musketeer have no glow parts, so a sprite there would float in mid-air.
-    if (this.glowMat) {
-      const visor = glowSprite(0.34, 0.13); visor.position.set(0, 0.19, 0.27); this.head.add(visor)
-      const gem = glowSprite(0.2, 0.2); gem.position.set(0, 0.05, 0.25); model.getObjectByName('chest')!.add(gem)
+    for (const spot of asset.glow) {
+      const halo = glowSprite(spot.w, spot.h)
+      halo.position.copy(spot.pos)
+      // A sprite always faces the camera, so seen side-on it would hang in the air in front of
+      // the glow. Fade it out as the glowing surface turns away from the viewer.
+      const mat = halo.material as THREE.SpriteMaterial
+      const n = new THREE.Vector3(), toCam = new THREE.Vector3(), q = new THREE.Quaternion()
+      halo.onBeforeRender = (_r, _s, camera) => {
+        halo.parent!.getWorldQuaternion(q)
+        n.copy(spot.out).applyQuaternion(q)
+        halo.getWorldPosition(toCam)
+        toCam.subVectors(camera.position, toCam).normalize()
+        const f = THREE.MathUtils.smoothstep(n.dot(toCam), 0.25, 0.75)
+        mat.opacity = f
+        halo.scale.set(spot.w * (0.6 + 0.4 * f), spot.h, 1)
+      }
+      model.getObjectByName(spot.bone)?.add(halo)
     }
 
     this.mixer = new THREE.AnimationMixer(model)

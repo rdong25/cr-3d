@@ -138,6 +138,7 @@ export function splatGround(mat: THREE.MeshStandardMaterial, mask: THREE.Texture
 export function heroSurface(mat: THREE.MeshStandardMaterial, set: PBRSet | null, tile: number, dissolve: { value: number }, opts: { wear?: number; normalStrength?: number; edge?: THREE.Color } = {}) {
   mat.userData.heroSurface = { set, tile, opts }
   const edge = opts.edge ?? new THREE.Color(4, 1.4, 0.3)
+  const baked = !!mat.normalMap
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, {
       tpColor: { value: set?.color ?? null }, tpNormal: { value: set?.normal ?? null }, tpRough: { value: set?.rough ?? null },
@@ -164,7 +165,7 @@ export function heroSurface(mat: THREE.MeshStandardMaterial, set: PBRSet | null,
           return mix(mix(mix(hHash(i), hHash(i + vec3(1,0,0)), f.x), mix(hHash(i + vec3(0,1,0)), hHash(i + vec3(1,1,0)), f.x), f.y),
                      mix(mix(hHash(i + vec3(0,0,1)), hHash(i + vec3(1,0,1)), f.x), mix(hHash(i + vec3(0,1,1)), hHash(i + vec3(1,1,1)), f.x), f.y), f.z);
         }`)
-      .replace('#include <map_fragment>', `
+      .replace('#include <map_fragment>', `#include <map_fragment>
         float dN = hNoise(vTriPos * 7.0) * 0.7 + hNoise(vTriPos * 19.0) * 0.3;
         // burn away from the feet upward
         float dCut = uDissolve * 1.25 - (1.0 - clamp(vTriPos.y / 1.9, 0.0, 1.0)) * 0.0;
@@ -174,13 +175,21 @@ export function heroSurface(mat: THREE.MeshStandardMaterial, set: PBRSet | null,
         vec3 tpW = tpWeights(tpN);
         vec3 tpP = vTriPos * tpScale;
         ${set ? 'diffuseColor.rgb *= mix(vec3(1.0), vec3(tpSample(tpColor, tpP, tpW).r * 1.22), tpWear);' : ''}`)
-      .replace('#include <roughnessmap_fragment>', set ? 'float roughnessFactor = clamp(roughness * mix(1.0, tpSample(tpRough, tpP, tpW).g * 1.7, tpWear), 0.05, 1.0);' : 'float roughnessFactor = roughness;')
-      .replace('#include <normal_fragment_maps>', set ? `
+      .replace('#include <roughnessmap_fragment>', set
+        ? '#include <roughnessmap_fragment>\nroughnessFactor = clamp(roughnessFactor * mix(1.0, tpSample(tpRough, tpP, tpW).g * 1.7, tpWear), 0.05, 1.0);'
+        : '#include <roughnessmap_fragment>')
+      // Models with a baked normal map (the Blender pipeline) keep it; the scanned detail is
+      // then added on top as a small perturbation instead of replacing the normal.
+      .replace('#include <normal_fragment_maps>', baked
+        ? (set ? `#include <normal_fragment_maps>
         vec3 tpNo = tpNormalObj(tpP, tpN, tpW);
-        normal = normalize(tpNo.x * vAxX + tpNo.y * vAxY + tpNo.z * vAxZ);` : '')
+        normal = normalize(normal + (tpNo.x - tpN.x) * vAxX + (tpNo.y - tpN.y) * vAxY + (tpNo.z - tpN.z) * vAxZ);` : '#include <normal_fragment_maps>')
+        : (set ? `
+        vec3 tpNo = tpNormalObj(tpP, tpN, tpW);
+        normal = normalize(tpNo.x * vAxX + tpNo.y * vAxY + tpNo.z * vAxZ);` : ''))
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += uEdge * dRim * 3.0;')
   }
-  mat.customProgramCacheKey = () => `hero-${set ? set.color.uuid : 'none'}-${tile}`
+  mat.customProgramCacheKey = () => `hero-${set ? set.color.uuid : 'none'}-${tile}-${baked ? 'baked' : 'painted'}`
   mat.needsUpdate = true
 }
 

@@ -113,7 +113,8 @@ for (const pc of PIECES) {
     const x = raw.positions[v * 3], y = raw.positions[v * 3 + 1], z = raw.positions[v * 3 + 2]
     bakedColor.set(bake(pc, x, y, z, gradient(pc.sdf, x, y, z)), v * 3)
   }
-  const mesh = await simplify({ positions: raw.positions, indices: new Uint32Array(keep) }, DECIMATE_RATIO, DECIMATE_ERROR, bakedColor, 3, COLOR_WEIGHT)
+  // A piece may loosen its own error bound (`err`): big soft cloth forms don't need 2 mm accuracy.
+  const mesh = await simplify({ positions: raw.positions, indices: new Uint32Array(keep) }, pc.ratio || DECIMATE_RATIO, pc.err || DECIMATE_ERROR, bakedColor, 3, COLOR_WEIGHT)
   const nv = mesh.positions.length / 3
   const normal = new Float32Array(nv * 3), color = mesh.attrs
   const skinIndex = new Uint16Array(nv * 4), skinWeight = new Float32Array(nv * 4)

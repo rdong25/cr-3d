@@ -164,7 +164,9 @@ export const CLIPS = [
         ...stance(0),
         root: [-1.42, 0, 0.25],
         hips: [0, 0, 0.1], spine: [-0.1, 0, 0], chest: [0, 0, 0], head: [0.2, 0.4, 0],
-        wing_L: [0, 0, -0.15], wing_R: [0, 0, 0.15],
+        // Wings lie spread flat under the body: the X turn undoes the root's
+        // fall, otherwise the (now large) membranes point straight down.
+        wing_L: [1.4, 0, -0.06], wing_R: [1.4, 0, 0.06],
         thigh_L: [-0.2, 0, 0.12], shin_L: [0.3, 0, 0], foot_L: [0.25, 0, 0],
         thigh_R: [-0.1, 0, -0.1], shin_R: [0.15, 0, 0], foot_R: [0.3, 0, 0],
         upperarm_R: [-0.3, 0, -1.1], forearm_R: [-0.3, 0, 0],

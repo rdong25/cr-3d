@@ -27,8 +27,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 const OUT = resolve(here, '../../public/models/dragon.glb')
 const DEFAULT_RES = 0.0065 // voxel size, model units (~6.5 mm on a 1.8 m hero)
 const DECIMATE_RATIO = 0.05 // ask for a lot; the error bound decides where detail stays
-const DECIMATE_ERROR = 0.0022
-const COLOR_WEIGHT = 0.6
+const DECIMATE_ERROR = Number(process.env.DRAGON_ERR || 0.0022)
+const COLOR_WEIGHT = Number(process.env.DRAGON_CW || 0.6)
 
 const t0 = Date.now()
 const boneIndex = new Map(BONES.map((b, i) => [b.name, i]))
@@ -113,7 +113,8 @@ for (const pc of PIECES) {
     const x = raw.positions[v * 3], y = raw.positions[v * 3 + 1], z = raw.positions[v * 3 + 2]
     bakedColor.set(bake(pc, x, y, z, gradient(pc.sdf, x, y, z)), v * 3)
   }
-  const mesh = await simplify({ positions: raw.positions, indices: new Uint32Array(keep) }, DECIMATE_RATIO, DECIMATE_ERROR, bakedColor, 3, COLOR_WEIGHT)
+  // A piece may loosen its own decimation (`ratio`, `err`, `cw`): big thin sheets and small trims don't need the default precision.
+  const mesh = await simplify({ positions: raw.positions, indices: new Uint32Array(keep) }, pc.ratio ?? DECIMATE_RATIO, pc.err ?? DECIMATE_ERROR, bakedColor, 3, pc.cw ?? COLOR_WEIGHT)
   const nv = mesh.positions.length / 3
   const normal = new Float32Array(nv * 3), color = mesh.attrs
   const skinIndex = new Uint16Array(nv * 4), skinWeight = new Float32Array(nv * 4)

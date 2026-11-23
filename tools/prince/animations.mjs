@@ -117,7 +117,7 @@ export const CLIPS = [
       const ready = stance(0)
       const windup = layer(ready, {
         hips: [0, -0.15, 0], spine: [-0.1, -0.2, 0], chest: [-0.08, -0.2, 0.04], head: [0.05, 0.3, 0],
-        upperarm_R: [-0.35, 0, -0.35], forearm_R: [-1.25, 0.2, 0], hand_R: [0.2, 0, 0],
+        upperarm_R: [1.39, 0.15, -0.46], forearm_R: [-0.77, 0, 0], hand_R: [0.05, -0.15, -0.01],
         cape_1: [-0.1, 0, 0], cape_2: [-0.05, 0, 0],
         upperarm_L: [-0.3, 0, 0.1], forearm_L: [0.15, 0, 0],
         thigh_L: [-0.12, 0, 0], shin_L: [0.1, 0, 0], thigh_R: [0.15, 0, 0], shin_R: [0.15, 0, 0],
@@ -125,14 +125,14 @@ export const CLIPS = [
       })
       const strike = layer(ready, {
         hips: [0, 0.2, 0], spine: [0.35, 0.15, 0], chest: [0.14, 0.25, -0.05], head: [-0.18, -0.25, 0],
-        upperarm_R: [-1.3, 0, -0.05], forearm_R: [-0.08, 0, 0], hand_R: [-0.1, 0, 0],
+        upperarm_R: [-0.01, 0.08, -0.94], forearm_R: [0.48, 0, 0], hand_R: [0.25, -0.21, -0.09],
         upperarm_L: [0.35, 0, 0.05], forearm_L: [0.4, 0, 0],
         thigh_L: [-0.85, 0, 0], shin_L: [0.7, 0, 0], foot_L: [0.2, 0, 0],
         thigh_R: [0.55, 0, 0], shin_R: [0.5, 0, 0], foot_R: [-0.3, 0, 0],
         tabard_F: [-0.35, 0, 0], cape_1: [0.35, 0, 0], cape_2: [0.2, 0, 0], cape_3: [0.15, 0, 0],
         pos: { hips: [0, -0.06, 0.14] },
       })
-      const follow = layer(strike, { upperarm_R: [0.2, 0, 0.05], forearm_R: [-0.2, 0, 0], spine: [0.04, 0, 0], tabard_F: [0.15, 0, 0] })
+      const follow = layer(strike, { upperarm_R: [0.05, 0, 0.04], forearm_R: [-0.06, 0, 0], spine: [0.04, 0, 0], tabard_F: [0.15, 0, 0] })
       const fast = (t) => 1 - Math.pow(1 - t, 3)
       return keyed([
         { t: 0, pose: ready },

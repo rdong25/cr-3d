@@ -27,7 +27,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const OUT = resolve(here, '../../public/models/giant.glb')
 const DEFAULT_RES = 0.0065 // voxel size, model units (~6.5 mm on a 1.8 m hero)
 const DECIMATE_RATIO = 0.05 // ask for a lot; the error bound decides where detail stays
-const DECIMATE_ERROR = 0.0022
+const DECIMATE_ERROR = 0.003 // the Knight's 0.0022 scaled by the Giant's x1.35 size: same relative fidelity
 const COLOR_WEIGHT = 0.6
 
 const t0 = Date.now()
