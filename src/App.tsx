@@ -126,6 +126,9 @@ export default function App() {
             onExit={() => { setResult(null); setScreen('lobby') }}
             onEmote={handleEmote}
             onJoystick={(dx, dy) => arenaRef.current?.moveFirst(dx, dy)}
+            onZoom={(f) => arenaRef.current?.zoom(f)}
+            sound={sound}
+            onToggleSound={toggleSound}
           />
         )}
         {screen === 'battle' && result && (
@@ -144,14 +147,14 @@ export default function App() {
             </div>
           </div>
         )}
-        <button
+        {screen !== 'battle' && <button
           className="btn ghost small"
           onClick={toggleSound}
           style={{ position: 'absolute', bottom: 12, right: 12 }}
           aria-label="Toggle sound"
         >
           {sound ? '🔊 Sound on' : '🔇 Muted'}
-        </button>
+        </button>}
       </div>
     </div>
   )

@@ -19,6 +19,10 @@ export class Engine {
   /** Troops rendered with a skinned .glb character instead of a procedural rig. */
   heroes = new Map<number, { hero: HeroInstance; side: Side; x: number; z: number; cd: number; yaw: number }>()
   private dying: { hero: HeroInstance; t: number; dur: number }[] = []
+  private deployHint = {
+    troop: new THREE.Mesh(new THREE.PlaneGeometry(22, 13), new THREE.MeshBasicMaterial({ color: 0x4a90ff, transparent: true, opacity: 0.12, depthWrite: false })),
+    spell: new THREE.Mesh(new THREE.PlaneGeometry(24, 28), new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.08, depthWrite: false })),
+  }
   towerMeshes = new Map<string, THREE.Group>()
   mode: CameraMode = 'broadcast'
   orbitAngle = 0.6
@@ -51,6 +55,13 @@ export class Engine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     container.appendChild(this.renderer.domElement)
     setHeroEnvironment(makeArenaEnvironment(this.renderer))
+    for (const [k, m] of Object.entries(this.deployHint)) {
+      m.rotation.x = -Math.PI / 2
+      m.position.set(0, 0.04, k === 'troop' ? 7.5 : 0)
+      m.visible = false
+      m.renderOrder = 1
+      this.scene.add(m)
+    }
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200)
     this.camera.position.set(0, 14, 16)
 
@@ -257,33 +268,84 @@ export class Engine {
   setCameraMode(m: CameraMode) { this.mode = m; if (m === 'first') { this.fpPos.set(0, 1.7, 11); this.fpYaw = 0; this.fpPitch = 0 } }
   setRide(id: number | null) { this.rideId = id; if (id != null) this.mode = 'ride' }
 
+  /** Broadcast / orbit camera distance multiplier: < 1 zooms in, > 1 shows more of the map. */
+  zoom = 1
+  zoomBy(factor: number) { this.zoom = THREE.MathUtils.clamp(this.zoom * factor, 0.5, 1.7) }
+
+  private pointers = new Map<number, { x: number; y: number }>()
+  private pinchDist = 0
+  private tap: { id: number; x: number; y: number; t: number; moved: boolean } | null = null
+
+  private pointerSpread(): number {
+    const [a, b] = [...this.pointers.values()]
+    return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0
+  }
+
   private bindInput() {
+    // One finger: drag to turn the camera, quick tap to deploy at that spot.
+    // Two fingers: pinch to zoom. Mouse wheel also zooms.
     const el = this.renderer.domElement
     el.style.touchAction = 'none'
-    el.addEventListener('pointerdown', (e) => { this.dragging = true; this.lastX = e.clientX; this.lastY = e.clientY })
-    window.addEventListener('pointerup', () => { this.dragging = false })
-    window.addEventListener('pointermove', (e) => {
+    el.addEventListener('pointerdown', (e) => {
+      try { el.setPointerCapture(e.pointerId) } catch { /* pointer already gone */ }
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (this.pointers.size === 1) {
+        this.dragging = true; this.lastX = e.clientX; this.lastY = e.clientY
+        this.tap = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), moved: false }
+      } else {
+        this.dragging = false; this.tap = null
+        this.pinchDist = this.pointerSpread()
+      }
+    })
+    const end = (e: PointerEvent) => {
+      const tap = this.tap
+      this.pointers.delete(e.pointerId)
+      if (e.type === 'pointerup' && tap && tap.id === e.pointerId && !tap.moved && performance.now() - tap.t < 500) this.tapAt(e.clientX, e.clientY)
+      this.tap = null
+      if (this.pointers.size === 1) {
+        const [p] = [...this.pointers.values()]
+        this.dragging = true; this.lastX = p.x; this.lastY = p.y
+      } else this.dragging = false
+    }
+    el.addEventListener('pointerup', end)
+    el.addEventListener('pointercancel', end)
+    el.addEventListener('pointermove', (e) => {
+      const p = this.pointers.get(e.pointerId)
+      if (!p) return
+      p.x = e.clientX; p.y = e.clientY
+      if (this.pointers.size >= 2) {
+        const d = this.pointerSpread()
+        if (this.pinchDist > 0 && d > 0) this.zoomBy(this.pinchDist / d)
+        this.pinchDist = d
+        return
+      }
       if (!this.dragging) return
+      if (this.tap && Math.hypot(e.clientX - this.tap.x, e.clientY - this.tap.y) > 10) this.tap.moved = true
       const dx = e.clientX - this.lastX; const dy = e.clientY - this.lastY
       this.lastX = e.clientX; this.lastY = e.clientY
       if (this.mode === 'broadcast') this.orbitAngle += dx * 0.005
       else if (this.mode === 'first') { this.fpYaw -= dx * 0.004; this.fpPitch = Math.max(-0.6, Math.min(0.6, this.fpPitch - dy * 0.003)) }
     })
-    el.addEventListener('click', (e) => {
-      if (this.mode !== 'first') return
-      // Reticle deploy: raycast to ground.
-      const rect = el.getBoundingClientRect()
-      const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1
-      const ny = -((e.clientY - rect.top) / rect.height) * 2 + 1
-      const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(nx, ny), this.camera)
-      const hit = ray.intersectObject(this.scene.children[0] as THREE.Object3D, false)
-      void hit
-      const t = -this.camera.position.y / ray.ray.direction.y
-      if (t > 0) {
-        const p = this.camera.position.clone().addScaledVector(ray.ray.direction, t)
-        this.cb.onDeployAt?.(THREE.MathUtils.clamp(p.x, -9, 9), THREE.MathUtils.clamp(p.z, 1, 12))
-      }
-    })
+    el.addEventListener('wheel', (e) => { e.preventDefault(); this.zoomBy(Math.exp(e.deltaY * 0.0015)) }, { passive: false })
+  }
+
+  /** Raycast a screen tap onto the ground and ask the game to deploy there. */
+  private tapAt(clientX: number, clientY: number) {
+    if (this.mode === 'ride') return
+    const rect = this.renderer.domElement.getBoundingClientRect()
+    const nx = ((clientX - rect.left) / rect.width) * 2 - 1
+    const ny = -((clientY - rect.top) / rect.height) * 2 + 1
+    const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(nx, ny), this.camera)
+    const t = -this.camera.position.y / ray.ray.direction.y
+    if (!(t > 0)) return
+    const p = this.camera.position.clone().addScaledVector(ray.ray.direction, t)
+    this.cb.onDeployAt?.(p.x, p.z)
+  }
+
+  /** Highlight where the selected card can go: your half for troops, everywhere for spells. */
+  setDeployHint(kind: 'troop' | 'spell' | null) {
+    this.deployHint.troop.visible = kind === 'troop'
+    this.deployHint.spell.visible = kind === 'spell'
   }
 
   resize() {
@@ -322,6 +384,10 @@ export class Engine {
       dummy.updateMatrix(); this.crowd.setMatrixAt(i, dummy.matrix)
     }
     this.crowd.instanceMatrix.needsUpdate = true
+
+    // Deploy hint pulses gently.
+    ;(this.deployHint.troop.material as THREE.MeshBasicMaterial).opacity = 0.2 + Math.sin(t * 4) * 0.06
+    ;(this.deployHint.spell.material as THREE.MeshBasicMaterial).opacity = 0.12 + Math.sin(t * 4) * 0.04
 
     // Troop meshes
     for (const tr of troops) {
@@ -365,12 +431,12 @@ export class Engine {
 
     // Camera
     if (this.mode === 'broadcast') {
-      const r = 19
-      this.camera.position.set(Math.sin(this.orbitAngle) * r * 0.55, 13.5, Math.cos(this.orbitAngle) * r * 0.55 + 2)
+      const r = 19 * this.zoom
+      this.camera.position.set(Math.sin(this.orbitAngle) * r * 0.55, 13.5 * this.zoom, Math.cos(this.orbitAngle) * r * 0.55 + 2)
       this.camera.lookAt(0, 0, 0)
     } else if (this.mode === 'orbit') {
       const a = t * 0.12
-      this.camera.position.set(Math.sin(a) * 15, 6.5, Math.cos(a) * 15)
+      this.camera.position.set(Math.sin(a) * 15 * this.zoom, 6.5 * this.zoom, Math.cos(a) * 15 * this.zoom)
       this.camera.lookAt(0, 0.5, 0)
     } else if (this.mode === 'first') {
       const speed = 5.2 * dt

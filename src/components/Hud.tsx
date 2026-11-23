@@ -17,11 +17,14 @@ interface Props {
   onExit: () => void
   onEmote: (e: string) => void
   onJoystick: (dx: number, dy: number) => void
+  onZoom: (factor: number) => void
+  sound: boolean
+  onToggleSound: () => void
 }
 
 const EMOTES = ['👋 Hi!', '😂 Ha!', '😮 Wow!', '👍 Good game!', '😡 Argh!', '👑 For the crown!']
 
-export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSelect, onDeployLane, onRide, onSurrender, onExit, onEmote, onJoystick }: Props) {
+export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSelect, onDeployLane, onRide, onSurrender, onExit, onEmote, onJoystick, onZoom, sound, onToggleSound }: Props) {
   const joyRef = useRef<HTMLDivElement>(null)
   const mm = Math.floor(snap.timeLeft / 60)
   const ss = String(snap.timeLeft % 60).padStart(2, '0')
@@ -49,6 +52,7 @@ export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSe
         <div className="row">
           <button className="btn ghost small" onClick={onExit}>Lobby</button>
           {mode === 'battle' && <button className="btn ghost small" onClick={onSurrender}>Surrender</button>}
+          <button className="btn ghost small" onClick={onToggleSound} aria-label="Toggle sound">{sound ? '🔊' : '🔇'}</button>
         </div>
       </div>
 
@@ -66,6 +70,12 @@ export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSe
             </button>
           ))}
           <button className="btn small ghost" onClick={onRide}>🏇 Ride troop</button>
+          {(camera === 'broadcast' || camera === 'orbit') && (
+            <div className="zoomRow">
+              <button className="btn small ghost" aria-label="Zoom out" onClick={() => onZoom(1.2)}>➖</button>
+              <button className="btn small ghost" aria-label="Zoom in" onClick={() => onZoom(1 / 1.2)}>➕</button>
+            </div>
+          )}
         </div>
         <div id="emoteBar">
           {EMOTES.map((e) => <button key={e} className="btn ghost small" onClick={() => onEmote(e)}>{e.split(' ')[0]}</button>)}
@@ -96,11 +106,11 @@ export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSe
                 )
               })}
             </div>
-            <div className="row" style={{ paddingBottom: 10 }}>
+            <div className="row" id="deployBar">
               <button className="btn small blue" onClick={() => onDeployLane(-1)}>⬅️ Deploy left</button>
               <button className="btn small blue" onClick={() => onDeployLane(1)}>Deploy right ➡️</button>
-              <span style={{ fontSize: 12, opacity: 0.8 }}>or tap a card, then tap the arena in 1st Person</span>
             </div>
+            <div id="deployHint">Or tap the glowing side of the arena to place it · pinch or scroll to zoom</div>
           </>
         ) : (
           <div className="row" style={{ padding: 12 }}><span className="pill">👁️ Spectating — both sides are AI. Switch cameras to watch up close.</span></div>

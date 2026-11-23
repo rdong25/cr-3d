@@ -74,7 +74,7 @@ export class Game {
     const def = CARDS[cardId]
     if (side === 'blue' && this.mode === 'battle') {
       if (this.elixir < def.cost) return false
-      if (z < 0.5) return false // own half only
+      if (cardId !== 'fireball' && z < 0.5) return false // troops: own half only; spells go anywhere
       this.elixir -= def.cost
     }
     if (side === 'red' && this.mode === 'battle') {
@@ -120,10 +120,13 @@ export class Game {
     this.events.onUpdate()
   }
 
+  /** Deploy the selected card at a tapped arena point. Troops snap onto your half; spells land where tapped. */
   deploySelected(x: number, z: number): boolean {
     if (!this.selected) return false
     const lane: -1 | 1 = x < 0 ? -1 : 1
-    return this.deploy(this.selected, 'blue', lane * 4.2, z, lane)
+    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
+    if (this.selected === 'fireball') return this.deploy('fireball', 'blue', clamp(x, -11, 11), clamp(z, -14, 14), lane)
+    return this.deploy(this.selected, 'blue', clamp(x, -10, 10), clamp(z, 1, 13), lane)
   }
 
   private damageArea(x: number, z: number, dmg: number, side: Side) {

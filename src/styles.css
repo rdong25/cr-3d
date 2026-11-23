@@ -60,3 +60,24 @@ h1 span{color:#ffd23d}
 table{width:100%;border-collapse:collapse;font-size:14px}
 td,th{padding:6px 8px;text-align:left;border-bottom:1px solid rgba(255,255,255,.1)}
 @media (max-width:640px){.handcard{width:62px}.handcard .em{font-size:22px}#joy{bottom:130px}}
+
+/* Deploy controls must take taps (the HUD container lets taps fall through to the arena). */
+#deployBar{pointer-events:auto;padding:0 10px 4px}
+#deployHint{text-align:center;font-size:12px;opacity:.8;padding:0 12px 10px;text-shadow:0 1px 4px #000}
+.zoomRow{display:flex;gap:6px;justify-content:flex-end}
+.zoomRow button{pointer-events:auto;flex:1}
+/* Keep the HUD clear of the notch / home indicator (full-screen home-screen launch). */
+#hud{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+#camBar,#emoteBar{top:calc(64px + env(safe-area-inset-top))}
+.screen{padding-top:calc(18px + env(safe-area-inset-top));padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+/* Phones: the top bar becomes two compact centered rows, side columns start below it. */
+@media (max-width:640px){
+  #hud .top{flex-direction:column;align-items:center;gap:6px;padding:8px 8px 0}
+  #hud .top .row{flex-wrap:nowrap;gap:6px}
+  #hud .top .pill{font-size:12px;padding:5px 9px}
+  #hud .top .btn.small{padding:6px 10px;font-size:13px}
+  #timer{font-size:18px}
+  #camBar,#emoteBar{top:calc(96px + env(safe-area-inset-top))}
+  #camBar .btn.small{padding:7px 10px;font-size:13px}
+  #emoteBar button{font-size:18px;padding:5px 8px}
+}

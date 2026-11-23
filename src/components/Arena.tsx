@@ -4,6 +4,7 @@ import { Game } from '../game'
 import type { GameMode, GameEvents } from '../game'
 import type { CameraMode, MatchRecord, Profile, TowerState, TroopState } from '../types'
 import { sfx } from '../sound'
+import { CARDS } from '../cards'
 
 export interface Snapshot {
   timeLeft: number
@@ -27,6 +28,7 @@ export interface ArenaHandle {
   surrender: () => void
   selectCard: (id: import('../types').CardId) => void
   moveFirst: (dx: number, dy: number) => void
+  zoom: (factor: number) => void
 }
 
 interface Props {
@@ -98,6 +100,9 @@ const Arena = forwardRef<ArenaHandle, Props>(function Arena({ profile, mode, act
       const dt = Math.min(0.05, (now - last) / 1000)
       last = now
       if (active) game.update(dt)
+      const sel = game.selected
+      const canPlay = active && game.mode === 'battle' && game.phase === 'playing' && sel != null && game.elixir >= CARDS[sel].cost
+      engine.setDeployHint(canPlay ? (sel === 'fireball' ? 'spell' : 'troop') : null)
       engine.render(dt, game.troops, game.towers)
       raf = requestAnimationFrame(loop)
     }
@@ -122,7 +127,8 @@ const Arena = forwardRef<ArenaHandle, Props>(function Arena({ profile, mode, act
     deployLane(lane: -1 | 1) {
       const g = gameRef.current
       if (!g || !g.selected) return
-      g.deploy(g.selected, 'blue', lane * 4.2, 6, lane)
+      // Spells from the lane buttons hit that lane's enemy princess tower; troops drop at your side of the lane.
+      g.deploy(g.selected, 'blue', lane * 4.2, g.selected === 'fireball' ? -8.5 : 6, lane)
     },
     deployAt(x: number, z: number) {
       gameRef.current?.deploySelected(x, z)
@@ -147,6 +153,9 @@ const Arena = forwardRef<ArenaHandle, Props>(function Arena({ profile, mode, act
     },
     moveFirst(dx: number, dy: number) {
       engineRef.current?.moveFirst(dx, dy)
+    },
+    zoom(factor: number) {
+      engineRef.current?.zoomBy(factor)
     }
   }), [])
 
