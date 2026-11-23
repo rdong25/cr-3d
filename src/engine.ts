@@ -11,6 +11,30 @@ export interface EngineCallbacks {
   onDeployAt?: (x: number, z: number) => void
 }
 
+export type ProjectileKind = 'arrow' | 'bullet' | 'bomb' | 'fire' | 'cannon'
+/** A visible shot: game logic applies damage instantly; this is the ammo the player sees fly. */
+export interface Shot {
+  kind: ProjectileKind
+  from: { x: number; y: number; z: number }
+  to: { x: number; y: number; z: number }
+}
+
+interface Projectile {
+  group: THREE.Group
+  from: THREE.Vector3
+  to: THREE.Vector3
+  kind: ProjectileKind
+  t: number
+  dur: number
+  arc: number
+}
+
+interface HpBar {
+  group: THREE.Group
+  fill: THREE.Mesh
+  width: number
+}
+
 export class Engine {
   renderer: THREE.WebGLRenderer
   scene = new THREE.Scene()
@@ -24,6 +48,9 @@ export class Engine {
     spell: new THREE.Mesh(new THREE.PlaneGeometry(24, 28), new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.08, depthWrite: false })),
   }
   towerMeshes = new Map<string, THREE.Group>()
+  /** Billboard HP bars, one per troop (keyed by troop id) and per tower (keyed by tower id). */
+  private hpBars = new Map<number | string, HpBar>()
+  private projectiles: Projectile[] = []
   mode: CameraMode = 'broadcast'
   orbitAngle = 0.6
   fpPos = new THREE.Vector3(0, 1.7, 11)
@@ -220,10 +247,111 @@ export class Engine {
       g.position.set(t.x, 0, t.z)
       this.scene.add(g)
       this.towerMeshes.set(t.id, g)
+      this.makeHpBar(t.id, t.side, 1.6, 0.16)
+    }
+  }
+
+  // --- HP bars ---------------------------------------------------------------
+  private makeHpBar(key: number | string, side: Side, width: number, height: number) {
+    const group = new THREE.Group()
+    const bg = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, height),
+      new THREE.MeshBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.75, depthTest: false })
+    )
+    bg.renderOrder = 998
+    const fill = new THREE.Mesh(
+      new THREE.PlaneGeometry(width - 0.04, height - 0.04),
+      new THREE.MeshBasicMaterial({ color: side === 'blue' ? 0x3d8bff : 0xff4a4a, depthTest: false })
+    )
+    fill.renderOrder = 999
+    group.add(bg, fill)
+    this.scene.add(group)
+    this.hpBars.set(key, { group, fill, width: width - 0.04 })
+  }
+
+  private updateHpBar(key: number | string, frac: number, x: number, y: number, z: number) {
+    const b = this.hpBars.get(key)
+    if (!b) return
+    const f = THREE.MathUtils.clamp(frac, 0, 1)
+    b.group.visible = f > 0
+    if (!b.group.visible) return
+    b.group.position.set(x, y, z)
+    b.group.quaternion.copy(this.camera.quaternion) // billboard: always faces the camera
+    b.fill.scale.x = Math.max(f, 0.001)
+    b.fill.position.x = -(1 - f) * b.width / 2 // fill drains from the right
+  }
+
+  private removeHpBar(key: number | string) {
+    const b = this.hpBars.get(key)
+    if (!b) return
+    this.scene.remove(b.group)
+    this.hpBars.delete(key)
+  }
+
+  /** Height of the HP bar above the ground for a troop. */
+  private troopBarHeight(t: TroopState): number {
+    const base = t.flying ? 1.1 : 0
+    return base + (t.cardId === 'giant' ? 2.5 : t.cardId === 'dragon' ? 2.4 : t.cardId === 'minions' ? 2.0 : 2.0)
+  }
+
+  // --- Projectiles -----------------------------------------------------------
+  /** Fly a visible shot from `from` to `to`. Damage was already applied by the game; this is the ammo. */
+  spawnShot(shot: Shot) {
+    const from = new THREE.Vector3(shot.from.x, shot.from.y, shot.from.z)
+    const to = new THREE.Vector3(shot.to.x, shot.to.y, shot.to.z)
+    const dist = from.distanceTo(to)
+    if (dist < 0.3) return
+    const group = new THREE.Group()
+    const speed = shot.kind === 'arrow' ? 20 : shot.kind === 'bullet' ? 30 : shot.kind === 'bomb' ? 9 : shot.kind === 'fire' ? 12 : 14
+    const arc = shot.kind === 'bomb' ? 2.2 : shot.kind === 'fire' ? 1.2 : 0
+    if (shot.kind === 'arrow') {
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.7, 6), new THREE.MeshStandardMaterial({ color: 0xd8c49a, roughness: 0.7 }))
+      shaft.rotation.x = Math.PI / 2
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.18, 6), new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.3, metalness: 0.8 }))
+      tip.rotation.x = Math.PI / 2; tip.position.z = 0.42
+      group.add(shaft, tip)
+    } else if (shot.kind === 'bullet') {
+      const tracer = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffe066 }))
+      tracer.scale.set(0.6, 0.6, 3.2)
+      group.add(tracer)
+    } else if (shot.kind === 'bomb') {
+      const bomb = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5 }))
+      const fuse = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffa53d }))
+      fuse.position.set(0, 0.22, 0)
+      group.add(bomb, fuse)
+    } else if (shot.kind === 'fire') {
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 10), new THREE.MeshBasicMaterial({ color: 0xff7a2a }))
+      const halo = new THREE.Mesh(new THREE.SphereGeometry(0.4, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffb03d, transparent: true, opacity: 0.35 }))
+      group.add(ball, halo)
+    } else {
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 8), new THREE.MeshStandardMaterial({ color: 0x2b2b2b, roughness: 0.4, metalness: 0.6 }))
+      group.add(ball)
+    }
+    group.position.copy(from)
+    group.lookAt(to)
+    this.scene.add(group)
+    this.projectiles.push({ group, from, to, kind: shot.kind, t: 0, dur: Math.max(0.15, dist / speed), arc })
+  }
+
+  private updateProjectiles(dt: number) {
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const p = this.projectiles[i]
+      p.t += dt / p.dur
+      if (p.t >= 1) {
+        if (p.kind === 'bomb' || p.kind === 'fire') this.shockwave(p.to.x, p.to.z, p.kind === 'fire' ? 0xff5722 : 0xffa53d)
+        this.scene.remove(p.group)
+        this.projectiles.splice(i, 1)
+        continue
+      }
+      const pos = new THREE.Vector3().lerpVectors(p.from, p.to, p.t)
+      if (p.arc > 0) pos.y += Math.sin(p.t * Math.PI) * p.arc
+      p.group.position.copy(pos)
+      if (p.kind === 'arrow' || p.kind === 'bullet' || p.kind === 'cannon') p.group.lookAt(p.to)
     }
   }
 
   addTroop(t: TroopState) {
+    this.makeHpBar(t.id, t.side, 0.9, 0.12)
     if (isHeroCard(t.cardId) && heroReady(t.cardId)) {
       const hero = new HeroInstance(t.side, t.cardId)
       const yaw = t.side === 'blue' ? Math.PI : 0
@@ -241,6 +369,7 @@ export class Engine {
   }
 
   removeTroop(id: number) {
+    this.removeHpBar(id)
     const h = this.heroes.get(id)
     if (h) {
       // Keep the body around for the death clip, then sink it into the turf.
@@ -398,6 +527,7 @@ export class Engine {
       animateRig(rig, t + tr.walkPhase, moving, tr.attackCd > 0.4)
       // Face movement direction
       rig.group.rotation.y = tr.side === 'blue' ? Math.PI : 0
+      this.updateHpBar(tr.id, tr.hp / tr.maxHp, tr.x, this.troopBarHeight(tr), tr.z)
     }
     for (const tr of troops) {
       const h = this.heroes.get(tr.id)
@@ -418,6 +548,7 @@ export class Engine {
       if (tr.attackCd > h.cd + 0.5) h.hero.attack()
       h.cd = tr.attackCd
       h.hero.update(dt, t)
+      this.updateHpBar(tr.id, tr.hp / tr.maxHp, tr.x, this.troopBarHeight(tr), tr.z)
     }
     for (let i = this.dying.length - 1; i >= 0; i--) {
       const d = this.dying[i]
@@ -427,7 +558,12 @@ export class Engine {
       if (d.t > sinkStart) d.hero.group.position.y = -(d.t - sinkStart) * 0.6
       if (d.t > sinkStart + 1.5) { d.hero.dispose(); this.dying.splice(i, 1) }
     }
-    void towers
+    // Tower HP bars (above the tower top; hidden once the tower falls).
+    for (const tw of towers) {
+      this.updateHpBar(tw.id, tw.hp / tw.maxHp, tw.x, tw.kind === 'king' ? 4.3 : 3.5, tw.z)
+    }
+    // Projectiles in flight.
+    this.updateProjectiles(dt)
 
     // Camera
     if (this.mode === 'broadcast') {

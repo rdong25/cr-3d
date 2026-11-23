@@ -78,4 +78,6 @@ export interface TowerState {
   hp: number
   maxHp: number
   alive: boolean
+  /** Seconds until the princess tower's next (visual) cannon shot. */
+  shotCd?: number
 }

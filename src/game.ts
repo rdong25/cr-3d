@@ -2,7 +2,7 @@ import { CARDS } from './cards'
 import { RivalAI } from './ai'
 import { sfx } from './sound'
 import type { CardId, MatchRecord, Profile, Side, TowerState, TroopState } from './types'
-import { towerPositions } from './engine'
+import { towerPositions, type Shot } from './engine'
 
 export type GamePhase = 'idle' | 'playing' | 'over'
 export type GameMode = 'battle' | 'spectate'
@@ -13,6 +13,8 @@ export interface GameEvents {
   onTroopAdd: (t: TroopState) => void
   onTroopRemove: (id: number) => void
   onFireball: (x: number, z: number) => void
+  /** A ranged attacker fired: the engine flies a visible projectile. Damage is applied instantly by the game; the shot is the visual. */
+  onShot: (shot: Shot) => void
   onEnd: (r: MatchRecord) => void
   onBanner: (text: string, sub?: string) => void
 }
@@ -143,6 +145,19 @@ export class Game {
     setTimeout(() => sfx.explosion(), 350)
   }
 
+  /** Fire a visible projectile for a ranged attack (range > 1.5). Melee troops have no ammo. */
+  private emitShot(t: TroopState, target: TroopState | TowerState) {
+    const def = CARDS[t.cardId]
+    if (def.range <= 1.5) return
+    const kind = t.cardId === 'archers' ? 'arrow' : t.cardId === 'musketeer' ? 'bullet' : t.cardId === 'bomber' ? 'bomb' : 'fire'
+    const isTower = 'kind' in target
+    this.events.onShot({
+      kind,
+      from: { x: t.x, y: t.flying ? 1.7 : 1.4, z: t.z },
+      to: { x: target.x, y: isTower ? 2.2 : target.flying ? 1.7 : 1.1, z: target.z },
+    })
+  }
+
   private kill(t: TroopState) {
     if (t.dead) return
     t.dead = true
@@ -238,6 +253,7 @@ export class Game {
           // Prince charge: double damage on first hit after moving.
           target.hp -= t.cardId === 'prince' && Math.abs(t.z) > 4 ? dmg * 1.6 : dmg
           sfx.hit()
+          this.emitShot(t, target)
           if (def.splash) {
             for (const e of this.troops) if (e.side !== t.side && !e.dead && Math.hypot(e.x - target.x, e.z - target.z) < 1.6) e.hp -= dmg * 0.5
           }
@@ -248,6 +264,7 @@ export class Game {
           t.attackCd = 1
           this.damageTower(towerTarget, def.damage * (t.side === 'red' ? this.ai.damageMultiplier() : 1))
           sfx.hit()
+          this.emitShot(t, towerTarget)
         }
       } else {
         // Move toward target tower / troop.
@@ -276,6 +293,16 @@ export class Game {
         // Simple cooldown via time-based chance per frame is jittery; use hp tick.
         nearest.hp -= 42 * dt
         if (nearest.hp <= 0) this.kill(nearest)
+        // Visual cannon shot every ~0.8s while a target is in range (damage itself stays continuous).
+        tw.shotCd = (tw.shotCd ?? 0) - dt
+        if (tw.shotCd <= 0) {
+          tw.shotCd = 0.8
+          this.events.onShot({
+            kind: 'cannon',
+            from: { x: tw.x, y: 3.0, z: tw.z },
+            to: { x: nearest.x, y: nearest.flying ? 1.7 : 1.0, z: nearest.z },
+          })
+        }
       }
     }
     this.troops = this.troops.filter((t) => !t.dead)
