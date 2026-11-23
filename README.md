@@ -44,11 +44,15 @@ Requires Node 18+.
 - **Competitive layer**: trophies (win +30 / lose −20), win/loss record,
   crowns, streaks, match history, and a ladder ranking you against nine
   arena rivals.
-- **Characters** built to the original game's quality standard: beveled
-  sculpted geometry, chunky heroic proportions (heads ~1/3 height, shorter
-  wider bodies, thicker limbs, bigger expressive eyes), clean saturated
-  painterly surfaces. Knight's walrus mustache and long hero sword, Archers'
-  magenta hair, Prince's visor glints. Troops walk, swing, breathe and blink.
+- **Characters** built as realistic humans, not toys: ~7.5-heads-tall
+  proportions, real facial anatomy (sclera / iris / pupil / eyelids that
+  blink, brows, nose with nostrils, lips, ears, jawline, cheekbones),
+  procedural skin textures (pores, blotches, freckles, stubble) with a
+  subsurface-style warm sheen, real hair as strands, and two-bone arms /
+  legs whose elbows and knees bend naturally. Knight's walrus mustache is
+  real facial hair, Archers have magenta hair in a ponytail, the Giant has
+  stubble. Skeletons / Bomber keep realistic bone, the Baby Dragon keeps
+  realistic scales. Troops walk, swing, breathe and blink.
 - **Synthesized sound** (WebAudio, no audio files): deploy, hits, fireball,
   explosions, tower falls, win/lose jingles. Toggle in the corner.
 
