@@ -1,0 +1,378 @@
+import * as THREE from 'three'
+import { buildKing, buildPrincess, buildTroop, animateRig, type Rig } from './characters'
+import type { CameraMode, CardId, Side, TowerState, TroopState } from './types'
+
+// Golden-hour stadium: gradient sky dome, warm key light + soft shadows,
+// cool rim fill, horizon haze, floodlit stands, torch lights, dust motes,
+// animated flowing river, turf with worn-earth patches.
+
+export interface EngineCallbacks {
+  onDeployAt?: (x: number, z: number) => void
+}
+
+export class Engine {
+  renderer: THREE.WebGLRenderer
+  scene = new THREE.Scene()
+  camera: THREE.PerspectiveCamera
+  rigs = new Map<number, Rig>()
+  towerMeshes = new Map<string, THREE.Group>()
+  mode: CameraMode = 'broadcast'
+  orbitAngle = 0.6
+  fpPos = new THREE.Vector3(0, 1.7, 11)
+  fpYaw = 0
+  fpPitch = 0
+  keys = new Set<string>()
+  shake = 0
+  riverMat: THREE.MeshStandardMaterial
+  crowd: THREE.InstancedMesh
+  crowdData: { x: number; z: number; phase: number; c: THREE.Color }[] = []
+  flash = 0
+  time = 0
+  private container: HTMLElement
+  private cb: EngineCallbacks
+  private dragging = false
+  private lastX = 0
+  private lastY = 0
+  private rideId: number | null = null
+
+  constructor(container: HTMLElement, cb: EngineCallbacks = {}) {
+    this.container = container
+    this.cb = cb
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' })
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
+    this.renderer.shadowMap.enabled = true
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+    this.renderer.toneMappingExposure = 1.12
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace
+    container.appendChild(this.renderer.domElement)
+    this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200)
+    this.camera.position.set(0, 14, 16)
+
+    // Sky dome — gradient via vertex colours on a big sphere.
+    const skyGeo = new THREE.SphereGeometry(90, 24, 16)
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      uniforms: { top: { value: new THREE.Color(0x2a4a8a) }, mid: { value: new THREE.Color(0xff9a5c) }, bot: { value: new THREE.Color(0xffd9a0) } },
+      vertexShader: `varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+      fragmentShader: `varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot;
+        void main(){ float h=normalize(vP).y; vec3 c = h>0.15 ? mix(mid,top,smoothstep(0.15,0.7,h)) : mix(bot,mid,smoothstep(-0.1,0.15,h)); gl_FragColor=vec4(c,1.0); }`
+    })
+    this.scene.add(new THREE.Mesh(skyGeo, skyMat))
+    // Sun glow sprite
+    const sun = new THREE.Mesh(new THREE.SphereGeometry(2.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffe9a8 }))
+    sun.position.set(-28, 22, -40); this.scene.add(sun)
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(4.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffc46a, transparent: true, opacity: 0.28 }))
+    halo.position.copy(sun.position); this.scene.add(halo)
+
+    this.scene.fog = new THREE.Fog(0xf2b98a, 35, 95)
+
+    // Lighting: warm low key + cool rim + ambient.
+    const sunLight = new THREE.DirectionalLight(0xffc27a, 2.4)
+    sunLight.position.set(-18, 22, 10)
+    sunLight.castShadow = true
+    sunLight.shadow.mapSize.set(1024, 1024)
+    sunLight.shadow.camera.left = -22; sunLight.shadow.camera.right = 22
+    sunLight.shadow.camera.top = 22; sunLight.shadow.camera.bottom = -22
+    this.scene.add(sunLight)
+    const rim = new THREE.DirectionalLight(0x7fb2ff, 0.9); rim.position.set(14, 10, -18); this.scene.add(rim)
+    this.scene.add(new THREE.AmbientLight(0xffe0b8, 0.55))
+    this.scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x3d5a2a, 0.5))
+
+    this.buildArena()
+    this.riverMat = new THREE.MeshStandardMaterial({ color: 0x2a7fd4, roughness: 0.15, metalness: 0.2, transparent: true, opacity: 0.92 })
+    const river = new THREE.Mesh(new THREE.PlaneGeometry(26, 2.6), this.riverMat)
+    river.rotation.x = -Math.PI / 2; river.position.set(0, 0.02, 0); this.scene.add(river)
+    // River flow stripes
+    for (let i = 0; i < 8; i++) {
+      const stripe = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.18), new THREE.MeshBasicMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.5 }))
+      stripe.rotation.x = -Math.PI / 2; stripe.position.set(-11 + i * 3.2, 0.04, 0); stripe.userData.flow = i; this.scene.add(stripe)
+    }
+
+    // Crowd — instanced, animated.
+    const crowdGeo = new THREE.BoxGeometry(0.32, 0.55, 0.32)
+    const crowdMat = new THREE.MeshStandardMaterial({ roughness: 0.9 })
+    this.crowd = new THREE.InstancedMesh(crowdGeo, crowdMat, 420)
+    const dummy = new THREE.Object3D()
+    const palette = [0xff5a5a, 0x5a8aff, 0xffd23d, 0x7dff8a, 0xff9ad5, 0xffffff, 0x9a7bff]
+    for (let i = 0; i < 420; i++) {
+      const side = i % 2 === 0 ? -1 : 1
+      const x = -13 + Math.random() * 26
+      const z = side * (13.5 + Math.random() * 3.5)
+      const c = new THREE.Color(palette[i % palette.length])
+      this.crowdData.push({ x, z, phase: Math.random() * Math.PI * 2, c })
+      dummy.position.set(x, 0.6, z); dummy.updateMatrix(); this.crowd.setMatrixAt(i, dummy.matrix)
+      this.crowd.setColorAt(i, c)
+    }
+    this.crowd.instanceMatrix.needsUpdate = true
+    this.scene.add(this.crowd)
+
+    // Dust motes
+    const dustGeo = new THREE.BufferGeometry()
+    const N = 160
+    const pos = new Float32Array(N * 3)
+    for (let i = 0; i < N; i++) { pos[i * 3] = (Math.random() - 0.5) * 36; pos[i * 3 + 1] = 0.5 + Math.random() * 8; pos[i * 3 + 2] = (Math.random() - 0.5) * 30 }
+    dustGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+    const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: 0xffe9b0, size: 0.09, transparent: true, opacity: 0.7 }))
+    dust.userData.dust = true; this.scene.add(dust)
+
+    this.bindInput()
+    this.resize()
+    window.addEventListener('resize', () => this.resize())
+    window.addEventListener('keydown', (e) => this.keys.add(e.key.toLowerCase()))
+    window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()))
+  }
+
+  private buildArena() {
+    // Turf with worn-earth patches.
+    const turf = new THREE.Mesh(new THREE.PlaneGeometry(26, 30), new THREE.MeshStandardMaterial({ color: 0x4a9e3f, roughness: 0.95 }))
+    turf.rotation.x = -Math.PI / 2; turf.receiveShadow = true; this.scene.add(turf)
+    const patchM = new THREE.MeshStandardMaterial({ color: 0x8a6a3d, roughness: 1 })
+    for (let i = 0; i < 14; i++) {
+      const p = new THREE.Mesh(new THREE.CircleGeometry(0.6 + Math.random() * 0.9, 10), patchM)
+      p.rotation.x = -Math.PI / 2; p.position.set((Math.random() - 0.5) * 22, 0.01, (Math.random() - 0.5) * 26); this.scene.add(p)
+    }
+    // Lane markings
+    const lineM = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 })
+    for (const x of [-4.2, 4.2]) {
+      const line = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 28), lineM)
+      line.rotation.x = -Math.PI / 2; line.position.set(x, 0.015, 0); this.scene.add(line)
+    }
+    const mid = new THREE.Mesh(new THREE.PlaneGeometry(26, 0.14), lineM)
+    mid.rotation.x = -Math.PI / 2; mid.position.set(0, 0.015, 0); this.scene.add(mid)
+    // Bridges
+    const bridgeM = new THREE.MeshStandardMaterial({ color: 0x9a7b4f, roughness: 0.85 })
+    for (const x of [-4.2, 4.2]) {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.28, 3.4), bridgeM)
+      b.position.set(x, 0.14, 0); b.castShadow = true; b.receiveShadow = true; this.scene.add(b)
+      for (const s of [-1, 1]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 3.4), new THREE.MeshStandardMaterial({ color: 0x6b4a1f, roughness: 0.9 }))
+        rail.position.set(x + s * 1.15, 0.5, 0); this.scene.add(rail)
+      }
+    }
+    // Stands
+    const standM = new THREE.MeshStandardMaterial({ color: 0x2a3350, roughness: 0.9 })
+    for (const s of [-1, 1]) {
+      for (let row = 0; row < 3; row++) {
+        const stand = new THREE.Mesh(new THREE.BoxGeometry(30, 1.1, 1.4), standM)
+        stand.position.set(0, 0.55 + row * 1.1, s * (12.5 + row * 1.5)); this.scene.add(stand)
+      }
+      // Floodlight poles + torch lights
+      for (const x of [-12, 0, 12]) {
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 6, 8), new THREE.MeshStandardMaterial({ color: 0x333a44, roughness: 0.6, metalness: 0.6 }))
+        pole.position.set(x, 3, s * 15.5); this.scene.add(pole)
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), new THREE.MeshBasicMaterial({ color: 0xfff2c0 }))
+        lamp.position.set(x, 6.1, s * 15.5); this.scene.add(lamp)
+        const light = new THREE.PointLight(0xffe9a0, 18, 22); light.position.set(x, 5.8, s * 14); this.scene.add(light)
+      }
+    }
+    // Centre-line banners
+    for (const s of [-1, 1]) {
+      const banner = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.8), new THREE.MeshStandardMaterial({ color: s < 0 ? 0x2f6df6 : 0xe23b3b, roughness: 0.8, side: THREE.DoubleSide }))
+      banner.position.set(s * 12.6, 2.2, 0); banner.rotation.y = s * Math.PI / 2; this.scene.add(banner)
+    }
+  }
+
+  buildTowers(towers: TowerState[]) {
+    for (const t of towers) {
+      const g = new THREE.Group()
+      const isKing = t.kind === 'king'
+      const h = isKing ? 3.4 : 2.6
+      const col = t.side === 'blue' ? 0x4a6fa5 : 0xa54a4a
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.45, h, 12), new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 }))
+      body.position.y = h / 2; body.castShadow = true; body.receiveShadow = true; g.add(body)
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2
+        const cren = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.45, 0.42), new THREE.MeshStandardMaterial({ color: 0xd8d2c4, roughness: 0.9 }))
+        cren.position.set(Math.cos(a) * 1.05, h + 0.2, Math.sin(a) * 1.05); g.add(cren)
+      }
+      const door = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.1), new THREE.MeshStandardMaterial({ color: 0x2b1d12, roughness: 0.9 }))
+      door.position.set(0, 0.55, t.side === 'blue' ? 1.32 : -1.32); g.add(door)
+      const winM = new THREE.MeshBasicMaterial({ color: 0xffd98a })
+      for (let i = 0; i < 3; i++) {
+        const w = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.42), winM)
+        const a = (i / 3) * Math.PI * 2 + 0.5
+        w.position.set(Math.cos(a) * 1.2, h * 0.6, Math.sin(a) * 1.2); w.lookAt(new THREE.Vector3(Math.cos(a) * 3, h * 0.6, Math.sin(a) * 3)); g.add(w)
+      }
+      if (isKing) {
+        const king = buildKing(t.side); king.position.y = h + 0.35; king.scale.setScalar(0.85); g.add(king)
+        const crownTop = new THREE.Mesh(new THREE.ConeGeometry(0.5, 0.7, 8), new THREE.MeshStandardMaterial({ color: 0xd4af37, roughness: 0.3, metalness: 0.9 }))
+        crownTop.position.y = h + 0.1; g.add(crownTop)
+      } else {
+        const pr = buildPrincess(t.side); pr.position.y = h + 0.1; pr.scale.setScalar(0.8); g.add(pr)
+      }
+      g.position.set(t.x, 0, t.z)
+      this.scene.add(g)
+      this.towerMeshes.set(t.id, g)
+    }
+  }
+
+  addTroop(t: TroopState) {
+    const rig = buildTroop(t.cardId, t.side)
+    rig.group.position.set(t.x, t.flying ? 1.1 : 0, t.z)
+    rig.group.rotation.y = t.side === 'blue' ? Math.PI : 0
+    this.scene.add(rig.group)
+    this.rigs.set(t.id, rig)
+  }
+
+  removeTroop(id: number) {
+    const r = this.rigs.get(id)
+    if (r) { this.scene.remove(r.group); this.rigs.delete(id) }
+    if (this.rideId === id) this.rideId = null
+  }
+
+  setTowerFallen(id: string) {
+    const g = this.towerMeshes.get(id)
+    if (!g) return
+    g.rotation.z = 0.5; g.position.y = -0.7; g.scale.y = 0.55
+    this.shake = 1; this.flash = 1
+  }
+
+  shockwave(x: number, z: number, color = 0xffa53d) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.09, 8, 24), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95 }))
+    ring.rotation.x = -Math.PI / 2; ring.position.set(x, 0.15, z); ring.userData.shock = 0
+    this.scene.add(ring)
+  }
+
+  setCameraMode(m: CameraMode) { this.mode = m; if (m === 'first') { this.fpPos.set(0, 1.7, 11); this.fpYaw = 0; this.fpPitch = 0 } }
+  setRide(id: number | null) { this.rideId = id; if (id != null) this.mode = 'ride' }
+
+  private bindInput() {
+    const el = this.renderer.domElement
+    el.style.touchAction = 'none'
+    el.addEventListener('pointerdown', (e) => { this.dragging = true; this.lastX = e.clientX; this.lastY = e.clientY })
+    window.addEventListener('pointerup', () => { this.dragging = false })
+    window.addEventListener('pointermove', (e) => {
+      if (!this.dragging) return
+      const dx = e.clientX - this.lastX; const dy = e.clientY - this.lastY
+      this.lastX = e.clientX; this.lastY = e.clientY
+      if (this.mode === 'broadcast') this.orbitAngle += dx * 0.005
+      else if (this.mode === 'first') { this.fpYaw -= dx * 0.004; this.fpPitch = Math.max(-0.6, Math.min(0.6, this.fpPitch - dy * 0.003)) }
+    })
+    el.addEventListener('click', (e) => {
+      if (this.mode !== 'first') return
+      // Reticle deploy: raycast to ground.
+      const rect = el.getBoundingClientRect()
+      const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      const ny = -((e.clientY - rect.top) / rect.height) * 2 + 1
+      const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(nx, ny), this.camera)
+      const hit = ray.intersectObject(this.scene.children[0] as THREE.Object3D, false)
+      void hit
+      const t = -this.camera.position.y / ray.ray.direction.y
+      if (t > 0) {
+        const p = this.camera.position.clone().addScaledVector(ray.ray.direction, t)
+        this.cb.onDeployAt?.(THREE.MathUtils.clamp(p.x, -9, 9), THREE.MathUtils.clamp(p.z, 1, 12))
+      }
+    })
+  }
+
+  resize() {
+    const w = this.container.clientWidth || window.innerWidth
+    const h = this.container.clientHeight || window.innerHeight
+    this.renderer.setSize(w, h)
+    this.camera.aspect = w / h
+    this.camera.updateProjectionMatrix()
+  }
+
+  render(dt: number, troops: TroopState[], towers: TowerState[]) {
+    this.time += dt
+    const t = this.time
+    // River flow
+    this.riverMat.color.setHSL(0.58, 0.75, 0.45 + Math.sin(t * 1.4) * 0.04)
+    for (const child of this.scene.children) {
+      if (child.userData.flow !== undefined) { child.position.x += dt * 0.9; if (child.position.x > 13) child.position.x = -13 }
+      if (child.userData.shock !== undefined) {
+        child.userData.shock += dt * 2.4
+        const s = 1 + child.userData.shock * 3.2
+        child.scale.setScalar(s)
+        ;((child as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.95 - child.userData.shock)
+        if (child.userData.shock > 1) this.scene.remove(child)
+      }
+      if (child.userData.dust) { child.rotation.y += dt * 0.02 }
+    }
+    // Crowd bounce
+    const dummy = new THREE.Object3D()
+    for (let i = 0; i < this.crowdData.length; i++) {
+      const c = this.crowdData[i]
+      dummy.position.set(c.x, 0.6 + Math.abs(Math.sin(t * 3 + c.phase)) * 0.22, c.z)
+      dummy.updateMatrix(); this.crowd.setMatrixAt(i, dummy.matrix)
+    }
+    this.crowd.instanceMatrix.needsUpdate = true
+
+    // Troop meshes
+    for (const tr of troops) {
+      const rig = this.rigs.get(tr.id)
+      if (!rig) continue
+      rig.group.position.set(tr.x, tr.flying ? 1.1 + Math.sin(t * 3 + tr.id) * 0.12 : 0, tr.z)
+      const moving = Math.abs(tr.x) > 0.01 || true
+      animateRig(rig, t + tr.walkPhase, moving, tr.attackCd > 0.4)
+      // Face movement direction
+      rig.group.rotation.y = tr.side === 'blue' ? Math.PI : 0
+    }
+    void towers
+
+    // Camera
+    if (this.mode === 'broadcast') {
+      const r = 19
+      this.camera.position.set(Math.sin(this.orbitAngle) * r * 0.55, 13.5, Math.cos(this.orbitAngle) * r * 0.55 + 2)
+      this.camera.lookAt(0, 0, 0)
+    } else if (this.mode === 'orbit') {
+      const a = t * 0.12
+      this.camera.position.set(Math.sin(a) * 15, 6.5, Math.cos(a) * 15)
+      this.camera.lookAt(0, 0.5, 0)
+    } else if (this.mode === 'first') {
+      const speed = 5.2 * dt
+      const fwd = new THREE.Vector3(-Math.sin(this.fpYaw), 0, -Math.cos(this.fpYaw))
+      const right = new THREE.Vector3(-fwd.z, 0, fwd.x)
+      if (this.keys.has('w') || this.keys.has('arrowup')) this.fpPos.addScaledVector(fwd, speed)
+      if (this.keys.has('s') || this.keys.has('arrowdown')) this.fpPos.addScaledVector(fwd, -speed)
+      if (this.keys.has('a') || this.keys.has('arrowleft')) this.fpPos.addScaledVector(right, -speed)
+      if (this.keys.has('d') || this.keys.has('arrowright')) this.fpPos.addScaledVector(right, speed)
+      this.fpPos.x = THREE.MathUtils.clamp(this.fpPos.x, -11, 11)
+      this.fpPos.z = THREE.MathUtils.clamp(this.fpPos.z, -13, 13)
+      this.camera.position.copy(this.fpPos)
+      this.camera.rotation.set(this.fpPitch, this.fpYaw, 0, 'YXZ')
+    } else if (this.mode === 'ride') {
+      const rig = this.rideId != null ? this.rigs.get(this.rideId) : undefined
+      if (rig) {
+        const p = rig.group.position
+        this.camera.position.set(p.x, p.y + 2.1, p.z + (rig.group.rotation.y === 0 ? 2.2 : -2.2))
+        this.camera.lookAt(p.x, p.y + 1, p.z + (rig.group.rotation.y === 0 ? -6 : 6))
+      } else {
+        this.camera.position.set(0, 10, 14); this.camera.lookAt(0, 0, 0)
+      }
+    }
+    if (this.shake > 0) {
+      this.shake = Math.max(0, this.shake - dt * 1.6)
+      this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5
+      this.camera.position.y += (Math.random() - 0.5) * this.shake * 0.4
+    }
+    if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 1.2)
+    this.renderer.render(this.scene, this.camera)
+  }
+
+  moveFirst(dx: number, dy: number) {
+    // Virtual joystick: dx/dy in [-1,1]
+    const fwd = new THREE.Vector3(-Math.sin(this.fpYaw), 0, -Math.cos(this.fpYaw))
+    const right = new THREE.Vector3(-fwd.z, 0, fwd.x)
+    this.fpPos.addScaledVector(fwd, -dy * 0.16)
+    this.fpPos.addScaledVector(right, dx * 0.16)
+    this.fpPos.x = THREE.MathUtils.clamp(this.fpPos.x, -11, 11)
+    this.fpPos.z = THREE.MathUtils.clamp(this.fpPos.z, -13, 13)
+  }
+
+  dispose() { this.renderer.dispose() }
+}
+
+export function towerPositions(): TowerState[] {
+  const mk = (id: string, side: Side, kind: 'king' | 'princess', lane: -1 | 0 | 1, x: number, z: number, hp: number): TowerState =>
+    ({ id, side, kind, lane, x, z, hp, maxHp: hp, alive: true })
+  return [
+    mk('blue-king', 'blue', 'king', 0, 0, 12.5, 2400),
+    mk('blue-p-left', 'blue', 'princess', -1, -4.2, 8.5, 1400),
+    mk('blue-p-right', 'blue', 'princess', 1, 4.2, 8.5, 1400),
+    mk('red-king', 'red', 'king', 0, 0, -12.5, 2400),
+    mk('red-p-left', 'red', 'princess', -1, -4.2, -8.5, 1400),
+    mk('red-p-right', 'red', 'princess', 1, 4.2, -8.5, 1400)
+  ]
+}

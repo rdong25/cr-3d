@@ -1,0 +1,315 @@
+import { CARDS } from './cards'
+import { RivalAI } from './ai'
+import { sfx } from './sound'
+import type { CardId, MatchRecord, Profile, Side, TowerState, TroopState } from './types'
+import { towerPositions } from './engine'
+
+export type GamePhase = 'idle' | 'playing' | 'over'
+export type GameMode = 'battle' | 'spectate'
+
+export interface GameEvents {
+  onUpdate: () => void
+  onTowerFall: (t: TowerState) => void
+  onTroopAdd: (t: TroopState) => void
+  onTroopRemove: (id: number) => void
+  onFireball: (x: number, z: number) => void
+  onEnd: (r: MatchRecord) => void
+  onBanner: (text: string, sub?: string) => void
+}
+
+let nextId = 1
+
+export class Game {
+  profile: Profile
+  mode: GameMode = 'battle'
+  phase: GamePhase = 'idle'
+  troops: TroopState[] = []
+  towers: TowerState[] = towerPositions()
+  elixir = 5
+  elixirMax = 10
+  timeLeft = 180
+  overtime = false
+  blueCrowns = 0
+  redCrowns = 0
+  hand: CardId[] = []
+  deckQueue: CardId[] = []
+  nextCard: CardId | null = null
+  selected: CardId | null = null
+  ai: RivalAI
+  spectateAI: RivalAI | null = null
+  blueElixir = 5
+  private aiTimer = 0
+  private events: GameEvents
+
+  constructor(profile: Profile, events: GameEvents) {
+    this.profile = profile
+    this.events = events
+    this.ai = new RivalAI(profile)
+  }
+
+  start(mode: GameMode = 'battle') {
+    this.mode = mode
+    this.phase = 'playing'
+    this.troops = []
+    this.towers = towerPositions()
+    this.elixir = 5; this.blueElixir = 5
+    this.timeLeft = 180; this.overtime = false
+    this.blueCrowns = 0; this.redCrowns = 0
+    this.ai = new RivalAI(this.profile)
+    this.spectateAI = mode === 'spectate' ? new RivalAI(this.profile) : null
+    // Shuffle deck into hand of 4 + queue.
+    const deck = [...this.profile.deck]
+    for (let i = deck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]] }
+    this.hand = deck.slice(0, 4)
+    this.deckQueue = deck.slice(4)
+    this.nextCard = this.deckQueue[0] ?? null
+    this.selected = this.hand[0] ?? null
+    this.events.onBanner(mode === 'spectate' ? 'AI vs AI — Spectate' : 'Battle start!', mode === 'spectate' ? 'Two rivals fight. Sit back and watch.' : 'Destroy more towers than your rival.')
+    sfx.crown()
+    this.events.onUpdate()
+  }
+
+  deploy(cardId: CardId, side: Side, x: number, z: number, lane: -1 | 1): boolean {
+    if (this.phase !== 'playing') return false
+    const def = CARDS[cardId]
+    if (side === 'blue' && this.mode === 'battle') {
+      if (this.elixir < def.cost) return false
+      if (z < 0.5) return false // own half only
+      this.elixir -= def.cost
+    }
+    if (side === 'red' && this.mode === 'battle') {
+      if (this.ai.elixir < def.cost) return false
+      this.ai.elixir -= def.cost
+    }
+    if (cardId === 'fireball') {
+      this.events.onFireball(x, z)
+      sfx.fireball()
+      this.damageArea(x, z, def.damage, side)
+      this.afterDeploy(side, cardId)
+      return true
+    }
+    const mult = side === 'red' ? this.ai.hpMultiplier() : 1
+    const dmgMult = side === 'red' ? this.ai.damageMultiplier() : 1
+    for (let i = 0; i < def.count; i++) {
+      const t: TroopState = {
+        id: nextId++, cardId, side,
+        x: x + (i - (def.count - 1) / 2) * 0.9,
+        z: z + (i % 2) * 0.7,
+        lane, hp: def.hp * mult, maxHp: def.hp * mult,
+        targetId: null, attackCd: 0, walkPhase: Math.random() * 6,
+        flying: !!def.flying, dead: false
+      }
+      void dmgMult
+      this.troops.push(t)
+      this.events.onTroopAdd(t)
+    }
+    sfx.deploy()
+    this.afterDeploy(side, cardId)
+    return true
+  }
+
+  private afterDeploy(side: Side, cardId: CardId) {
+    if (side !== 'blue' || this.mode !== 'battle') return
+    const idx = this.hand.indexOf(cardId)
+    if (idx >= 0) {
+      this.hand[idx] = this.deckQueue.shift() ?? cardId
+      this.deckQueue.push(cardId)
+      this.nextCard = this.deckQueue[0] ?? null
+      this.selected = this.hand[0] ?? null
+    }
+    this.events.onUpdate()
+  }
+
+  deploySelected(x: number, z: number): boolean {
+    if (!this.selected) return false
+    const lane: -1 | 1 = x < 0 ? -1 : 1
+    return this.deploy(this.selected, 'blue', lane * 4.2, z, lane)
+  }
+
+  private damageArea(x: number, z: number, dmg: number, side: Side) {
+    for (const t of this.troops) {
+      if (t.side === side) continue
+      const d = Math.hypot(t.x - x, t.z - z)
+      if (d < 3) { t.hp -= dmg; if (t.hp <= 0) this.kill(t) }
+    }
+    for (const tw of this.towers) {
+      if (tw.side === side || !tw.alive) continue
+      const d = Math.hypot(tw.x - x, tw.z - z)
+      if (d < 3) this.damageTower(tw, dmg)
+    }
+    setTimeout(() => sfx.explosion(), 350)
+  }
+
+  private kill(t: TroopState) {
+    if (t.dead) return
+    t.dead = true
+    this.events.onTroopRemove(t.id)
+  }
+
+  private damageTower(tw: TowerState, dmg: number) {
+    tw.hp -= dmg
+    if (tw.hp <= 0 && tw.alive) {
+      tw.alive = false; tw.hp = 0
+      if (tw.side === 'red') this.blueCrowns++
+      else this.redCrowns++
+      this.events.onTowerFall(tw)
+      sfx.towerFall()
+      if (tw.kind === 'king') this.end()
+      else this.events.onBanner(tw.side === 'red' ? 'Tower destroyed!' : 'Your tower fell!', tw.side === 'red' ? '+1 crown' : 'Defend the King!')
+    }
+    this.events.onUpdate()
+  }
+
+  update(dt: number) {
+    if (this.phase !== 'playing') return
+    // Timer
+    this.timeLeft -= dt
+    if (this.timeLeft <= 0) {
+      if (!this.overtime) {
+        if (this.blueCrowns !== this.redCrowns) { this.end(); return }
+        this.overtime = true; this.timeLeft = 60
+        this.events.onBanner('Overtime — Sudden Death', 'Next tower wins!')
+        sfx.crown()
+      } else { this.end(); return }
+    }
+    // Elixir regen (2x in last minute / overtime)
+    const rate = (this.overtime || this.timeLeft < 60) ? 2 : 1
+    this.elixir = Math.min(this.elixirMax, this.elixir + dt * rate * (1 / 2.8))
+    if (this.mode === 'spectate' && this.spectateAI) this.blueElixir = Math.min(10, this.blueElixir + dt * (1 / 2.8))
+
+    // Rival AI
+    this.aiTimer += dt
+    if (this.aiTimer > 0.5) {
+      this.aiTimer = 0
+      const threat = this.troops.filter((t) => t.side === 'blue' && t.z < 0).length / 4
+      const dec = this.ai.update(0.5, threat, this.troops.filter((t) => t.side === 'red').length)
+      if (dec) this.deploy(dec.cardId, 'red', dec.x, dec.z, dec.lane)
+      if (this.mode === 'spectate' && this.spectateAI) {
+        const threatB = this.troops.filter((t) => t.side === 'red' && t.z > 0).length / 4
+        const decB = this.spectateAI.update(0.5, threatB, this.troops.filter((t) => t.side === 'blue').length)
+        if (decB) {
+          // Spectate blue AI deploys on blue side, bypassing player elixir.
+          const def = CARDS[decB.cardId]
+          this.spectateAI.elixir -= def.cost
+          for (let i = 0; i < def.count; i++) {
+            const t: TroopState = { id: nextId++, cardId: decB.cardId, side: 'blue', x: -decB.x + (i - (def.count - 1) / 2) * 0.9, z: -decB.z, lane: decB.lane, hp: def.hp, maxHp: def.hp, targetId: null, attackCd: 0, walkPhase: Math.random() * 6, flying: !!def.flying, dead: false }
+            this.troops.push(t); this.events.onTroopAdd(t)
+          }
+        }
+      }
+    }
+
+    // Troop movement + combat
+    for (const t of [...this.troops]) {
+      if (t.dead) continue
+      t.attackCd -= dt
+      const def = CARDS[t.cardId]
+      // Find target: nearest enemy troop in range, else nearest alive enemy tower.
+      let target: TroopState | null = null
+      let best = Infinity
+      for (const e of this.troops) {
+        if (e.side === t.side || e.dead) continue
+        // Giants only target buildings.
+        if (t.cardId === 'giant') continue
+        const d = Math.hypot(e.x - t.x, e.z - t.z)
+        if (d < best) { best = d; target = e }
+      }
+      let towerTarget: TowerState | null = null
+      let bestT = Infinity
+      for (const tw of this.towers) {
+        if (tw.side === t.side || !tw.alive) continue
+        // Princess towers first; king only if its princess towers are down or troop is past river.
+        if (tw.kind === 'king') {
+          const guards = this.towers.filter((g) => g.side === tw.side && g.kind === 'princess' && g.alive)
+          if (guards.length && Math.abs(t.z) < 8) continue
+        }
+        const d = Math.hypot(tw.x - t.x, tw.z - t.z)
+        if (d < bestT) { bestT = d; towerTarget = tw }
+      }
+      const inRangeTroop = target && best <= def.range
+      const inRangeTower = towerTarget && bestT <= def.range + 0.8
+      if (inRangeTroop && target) {
+        if (t.attackCd <= 0) {
+          t.attackCd = 1
+          const dmg = def.damage * (t.side === 'red' ? this.ai.damageMultiplier() : 1)
+          // Prince charge: double damage on first hit after moving.
+          target.hp -= t.cardId === 'prince' && Math.abs(t.z) > 4 ? dmg * 1.6 : dmg
+          sfx.hit()
+          if (def.splash) {
+            for (const e of this.troops) if (e.side !== t.side && !e.dead && Math.hypot(e.x - target.x, e.z - target.z) < 1.6) e.hp -= dmg * 0.5
+          }
+          if (target.hp <= 0) this.kill(target)
+        }
+      } else if (inRangeTower && towerTarget) {
+        if (t.attackCd <= 0) {
+          t.attackCd = 1
+          this.damageTower(towerTarget, def.damage * (t.side === 'red' ? this.ai.damageMultiplier() : 1))
+          sfx.hit()
+        }
+      } else {
+        // Move toward target tower / troop.
+        const dest = target && best < 9 ? target : towerTarget
+        if (dest) {
+          const dx = dest.x - t.x; const dz = dest.z - t.z
+          const d = Math.hypot(dx, dz) || 1
+          const step = def.speed * dt
+          t.x += (dx / d) * step; t.z += (dz / d) * step
+          t.walkPhase += dt * 9
+        }
+      }
+      // Tower counter-attack (princess towers shoot).
+      // Handled below per-tower.
+    }
+    // Tower shots
+    for (const tw of this.towers) {
+      if (!tw.alive || tw.kind !== 'princess') continue
+      let nearest: TroopState | null = null; let bd = 7.5
+      for (const t of this.troops) {
+        if (t.side === tw.side || t.dead) continue
+        const d = Math.hypot(t.x - tw.x, t.z - tw.z)
+        if (d < bd) { bd = d; nearest = t }
+      }
+      if (nearest) {
+        // Simple cooldown via time-based chance per frame is jittery; use hp tick.
+        nearest.hp -= 42 * dt
+        if (nearest.hp <= 0) this.kill(nearest)
+      }
+    }
+    this.troops = this.troops.filter((t) => !t.dead)
+    this.events.onUpdate()
+  }
+
+  private end() {
+    if (this.phase === 'over') return
+    this.phase = 'over'
+    const result: MatchRecord['result'] = this.blueCrowns > this.redCrowns ? 'win' : this.blueCrowns < this.redCrowns ? 'loss' : 'draw'
+    let delta = 0
+    if (this.mode === 'battle') {
+      delta = result === 'win' ? 30 : result === 'loss' ? -20 : 0
+      const p = this.profile
+      p.trophies = Math.max(0, p.trophies + delta)
+      if (result === 'win') { p.wins++; p.streak++; p.bestStreak = Math.max(p.bestStreak, p.streak) }
+      else if (result === 'loss') { p.losses++; p.streak = 0 }
+      else p.draws++
+      p.crowns += this.blueCrowns
+      // Rivals drift with you.
+      for (const r of p.rivals) r.trophies = Math.max(200, r.trophies + Math.floor((Math.random() - 0.45) * 30))
+      p.rivals.sort((a, b) => b.trophies - a.trophies)
+    }
+    const rec: MatchRecord = {
+      id: `${Date.now()}`,
+      date: new Date().toISOString(),
+      result,
+      blueCrowns: this.blueCrowns,
+      redCrowns: this.redCrowns,
+      trophiesDelta: delta,
+      opponent: this.ai.name
+    }
+    if (this.mode === 'battle') this.profile.matches.unshift(rec)
+    if (result === 'win') sfx.win(); else if (result === 'loss') sfx.lose(); else sfx.crown()
+    this.events.onEnd(rec)
+    this.events.onUpdate()
+  }
+
+  surrender() { if (this.phase === 'playing') { this.blueCrowns = 0; this.redCrowns = 1; this.end() } }
+}
