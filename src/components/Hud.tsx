@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { CARDS } from '../cards'
 import type { CameraMode, CardId } from '../types'
 import type { Snapshot } from './Arena'
@@ -23,9 +23,13 @@ interface Props {
 }
 
 const EMOTES = ['👋 Hi!', '😂 Ha!', '😮 Wow!', '👍 Good game!', '😡 Argh!', '👑 For the crown!']
+const CAM_LABEL: Record<CameraMode, string> = { broadcast: '📺 Broadcast', orbit: '🎥 Orbit', first: '🧍 1st Person', ride: '🏇 Ride troop' }
 
 export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSelect, onDeployLane, onRide, onSurrender, onExit, onEmote, onJoystick, onZoom, sound, onToggleSound }: Props) {
   const joyRef = useRef<HTMLDivElement>(null)
+  // On phones the camera and emote columns collapse behind one button each (see styles.css).
+  const [camsOpen, setCamsOpen] = useState(false)
+  const [emotesOpen, setEmotesOpen] = useState(false)
   const mm = Math.floor(snap.timeLeft / 60)
   const ss = String(snap.timeLeft % 60).padStart(2, '0')
   const elixirPct = Math.min(100, (snap.elixir / 10) * 100)
@@ -63,13 +67,16 @@ export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSe
       </div>
 
       <div>
-        <div id="camBar">
-          {(['broadcast', 'orbit', 'first'] as CameraMode[]).map((m) => (
-            <button key={m} className={`btn small ${camera === m ? '' : 'ghost'}`} onClick={() => onCamera(m)}>
-              {m === 'broadcast' ? '📺 Broadcast' : m === 'orbit' ? '🎥 Orbit' : '🧍 1st Person'}
-            </button>
-          ))}
-          <button className="btn small ghost" onClick={onRide}>🏇 Ride troop</button>
+        <div id="camBar" className={camsOpen ? 'open' : ''}>
+          <button className="btn small panelToggle" aria-label="Camera" onClick={() => setCamsOpen((o) => !o)}>{CAM_LABEL[camera].split(' ')[0]} ▾</button>
+          <div className="panelList">
+            {(['broadcast', 'orbit', 'first'] as CameraMode[]).map((m) => (
+              <button key={m} className={`btn small ${camera === m ? '' : 'ghost'}`} onClick={() => { onCamera(m); setCamsOpen(false) }}>
+                {CAM_LABEL[m]}
+              </button>
+            ))}
+            <button className="btn small ghost" onClick={() => { onRide(); setCamsOpen(false) }}>🏇 Ride troop</button>
+          </div>
           {(camera === 'broadcast' || camera === 'orbit') && (
             <div className="zoomRow">
               <button className="btn small ghost" aria-label="Zoom out" onClick={() => onZoom(1.2)}>➖</button>
@@ -77,8 +84,11 @@ export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSe
             </div>
           )}
         </div>
-        <div id="emoteBar">
-          {EMOTES.map((e) => <button key={e} className="btn ghost small" onClick={() => onEmote(e)}>{e.split(' ')[0]}</button>)}
+        <div id="emoteBar" className={emotesOpen ? 'open' : ''}>
+          <button className="btn ghost small panelToggle" aria-label="Emotes" onClick={() => setEmotesOpen((o) => !o)}>😀</button>
+          <div className="panelList">
+            {EMOTES.map((e) => <button key={e} className="btn ghost small" onClick={() => { onEmote(e); setEmotesOpen(false) }}>{e.split(' ')[0]}</button>)}
+          </div>
         </div>
         {camera === 'first' && (
           <div id="joy" ref={joyRef} onPointerMove={joyMove} onPointerDown={joyMove}>
@@ -110,7 +120,7 @@ export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSe
               <button className="btn small blue" onClick={() => onDeployLane(-1)}>⬅️ Deploy left</button>
               <button className="btn small blue" onClick={() => onDeployLane(1)}>Deploy right ➡️</button>
             </div>
-            <div id="deployHint">Or tap the glowing side of the arena to place it · pinch or scroll to zoom</div>
+            <div id="deployHint">Or tap your glowing side to place · pinch to zoom</div>
           </>
         ) : (
           <div className="row" style={{ padding: 12 }}><span className="pill">👁️ Spectating — both sides are AI. Switch cameras to watch up close.</span></div>

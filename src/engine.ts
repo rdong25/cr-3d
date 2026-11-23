@@ -161,6 +161,8 @@ export class Engine {
 
     this.bindInput()
     this.resize()
+    // Phones in portrait start a little zoomed out so both kings' towers fit.
+    if (this.camera.aspect < 1) { this.zoom = 1.15; this.orbitAngle = 0.15 }
     window.addEventListener('resize', () => this.resize())
     window.addEventListener('keydown', (e) => this.keys.add(e.key.toLowerCase()))
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()))
@@ -261,7 +263,9 @@ export class Engine {
     bg.renderOrder = 998
     const fill = new THREE.Mesh(
       new THREE.PlaneGeometry(width - 0.04, height - 0.04),
-      new THREE.MeshBasicMaterial({ color: side === 'blue' ? 0x3d8bff : 0xff4a4a, depthTest: false })
+      // transparent like the background, so renderOrder (999 > 998) puts the fill on top;
+      // an opaque fill is drawn before all transparent objects and gets covered.
+      new THREE.MeshBasicMaterial({ color: side === 'blue' ? 0x3d8bff : 0xff4a4a, depthTest: false, transparent: true, opacity: 1 })
     )
     fill.renderOrder = 999
     group.add(bg, fill)
@@ -486,6 +490,10 @@ export class Engine {
     // still fits, instead of cropping to the middle.
     const aspect = w / h
     this.camera.fov = aspect >= 1 ? 55 : Math.min(80, THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(22)) / aspect)))
+    // Portrait: the hand, elixir bar and deploy buttons cover the bottom of the
+    // screen, so shift the rendered view up to keep your side of the arena visible.
+    if (aspect < 1) this.camera.setViewOffset(w, h, 0, Math.round(h * 0.1), w, h)
+    else this.camera.clearViewOffset()
     this.camera.updateProjectionMatrix()
   }
 
@@ -524,7 +532,9 @@ export class Engine {
       if (!rig) continue
       rig.group.position.set(tr.x, tr.flying ? 1.1 + Math.sin(t * 3 + tr.id) * 0.12 : 0, tr.z)
       const moving = Math.abs(tr.x) > 0.01 || true
-      animateRig(rig, t + tr.walkPhase, moving, tr.attackCd > 0.4)
+      // animateRig already advances the stride from time; adding walkPhase (which the
+      // game also advances ~9/s) made legs cycle ~14x a second. Use a fixed per-troop offset.
+      animateRig(rig, t + (tr.id % 7) * 0.45, moving, tr.attackCd > 0.4)
       // Face movement direction
       rig.group.rotation.y = tr.side === 'blue' ? Math.PI : 0
       this.updateHpBar(tr.id, tr.hp / tr.maxHp, tr.x, this.troopBarHeight(tr), tr.z)

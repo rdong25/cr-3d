@@ -81,3 +81,32 @@ td,th{padding:6px 8px;text-align:left;border-bottom:1px solid rgba(255,255,255,.
   #camBar .btn.small{padding:7px 10px;font-size:13px}
   #emoteBar button{font-size:18px;padding:5px 8px}
 }
+
+/* Collapsible side panels: full columns on big screens, one toggle button each on phones. */
+#camBar .panelList,#emoteBar .panelList{display:flex;flex-direction:column;gap:6px}
+#camBar .panelList{align-items:stretch}
+.panelToggle{display:none;pointer-events:auto}
+#emoteBar .panelList button{pointer-events:auto}
+@media (max-width:640px),(max-height:500px){
+  .panelToggle{display:block}
+  #camBar .panelList,#emoteBar .panelList{display:none;margin-top:6px}
+  #camBar.open .panelList,#emoteBar.open .panelList{display:flex}
+  #camBar .panelList{background:rgba(10,14,34,.82);border-radius:14px;padding:6px}
+  .zoomRow{margin-top:6px}
+  .zoomRow button{padding:6px 12px}
+}
+/* Landscape phones: compact everything so the arena stays visible. */
+@media (max-height:500px){
+  #hud .top{padding:6px 10px 0}
+  #hud .top .pill{font-size:12px;padding:4px 9px}
+  #hud .top .btn.small{padding:5px 10px;font-size:13px}
+  #timer{font-size:18px}
+  #camBar,#emoteBar{top:calc(48px + env(safe-area-inset-top))}
+  #elixirWrap{width:min(360px,50vw)}
+  #hand{padding:6px 10px 4px;gap:6px}
+  .handcard{width:56px;padding:4px}
+  .handcard .em{font-size:18px}
+  .handcard b{font-size:10px}
+  #deployBar .btn.small{padding:6px 12px;font-size:13px}
+  #deployHint{display:none}
+}
