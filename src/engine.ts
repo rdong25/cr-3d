@@ -1,5 +1,12 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { buildKing, buildPrincess, buildTroop, animateRig, type Rig } from './characters'
 import type { CameraMode, CardId, Side, TowerState, TroopState } from './types'
 import { HeroInstance, heroReady, isHeroCard, makeArenaEnvironment, setHeroEnvironment } from './hero'
@@ -81,15 +88,17 @@ export class Engine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.12
+    // AgX: filmic, keeps highlights and avoids ACES's oversaturated "toy" look.
+    this.renderer.toneMapping = THREE.AgXToneMapping
+    this.renderer.toneMappingExposure = 1.05
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     container.appendChild(this.renderer.domElement)
     this.env = makeArenaEnvironment(this.renderer)
     setHeroEnvironment(this.env)
     // Soft image-based fill for every PBR material in the arena.
     this.scene.environment = this.env
-    this.scene.environmentIntensity = 0.35
+    this.scene.environmentIntensity = 0.38
+    this.loadSky()
     for (const [k, m] of Object.entries(this.deployHint)) {
       m.rotation.x = -Math.PI / 2
       m.position.set(0, 0.04, k === 'troop' ? 7.5 : 0)
@@ -100,27 +109,14 @@ export class Engine {
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200)
     this.camera.position.set(0, 14, 16)
 
-    // Sky dome — gradient via vertex colours on a big sphere.
-    const skyGeo = new THREE.SphereGeometry(90, 24, 16)
-    const skyMat = new THREE.ShaderMaterial({
-      side: THREE.BackSide,
-      uniforms: { top: { value: new THREE.Color(0x2a4a8a) }, mid: { value: new THREE.Color(0xff9a5c) }, bot: { value: new THREE.Color(0xffd9a0) } },
-      vertexShader: `varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-      fragmentShader: `varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot;
-        void main(){ float h=normalize(vP).y; vec3 c = h>0.15 ? mix(mid,top,smoothstep(0.15,0.7,h)) : mix(bot,mid,smoothstep(-0.1,0.15,h)); gl_FragColor=vec4(c,1.0); }`
-    })
-    this.scene.add(new THREE.Mesh(skyGeo, skyMat))
-    // Sun glow sprite
-    const sun = new THREE.Mesh(new THREE.SphereGeometry(2.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffe9a8 }))
-    sun.position.set(-28, 22, -40); this.scene.add(sun)
-    const halo = new THREE.Mesh(new THREE.SphereGeometry(4.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffc46a, transparent: true, opacity: 0.28 }))
-    halo.position.copy(sun.position); this.scene.add(halo)
+    // Sky: a gradient dome until the HDR sky (loadSky) arrives.
+    this.scene.background = new THREE.Color(0x4a3f48)
+    this.scene.fog = new THREE.Fog(0x5e5052, 55, 160)
 
-    this.scene.fog = new THREE.Fog(0xf2b98a, 35, 95)
-
-    // Lighting: warm low key + cool rim + ambient.
-    const sunLight = new THREE.DirectionalLight(0xffc27a, 2.4)
-    sunLight.position.set(-18, 22, 10)
+    // Lighting: low warm sun (strong shadows), cool sky fill from the HDR
+    // environment, and only a little flat ambient so forms keep their contrast.
+    const sunLight = new THREE.DirectionalLight(0xffcfa0, 3.0)
+    sunLight.position.set(-20, 18, 8)
     sunLight.castShadow = true
     sunLight.shadow.mapSize.set(2048, 2048)
     sunLight.shadow.bias = -0.0005
@@ -128,12 +124,13 @@ export class Engine {
     sunLight.shadow.camera.left = -22; sunLight.shadow.camera.right = 22
     sunLight.shadow.camera.top = 22; sunLight.shadow.camera.bottom = -22
     this.scene.add(sunLight)
-    const rim = new THREE.DirectionalLight(0x7fb2ff, 0.9); rim.position.set(14, 10, -18); this.scene.add(rim)
-    this.scene.add(new THREE.AmbientLight(0xffe0b8, 0.55))
-    this.scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x3d5a2a, 0.5))
+    const rim = new THREE.DirectionalLight(0x8fb0ff, 0.7); rim.position.set(14, 10, -18); this.scene.add(rim)
+    this.scene.add(new THREE.AmbientLight(0xffe0c8, 0.12))
+    this.scene.add(new THREE.HemisphereLight(0x9fb4d8, 0x2a2418, 0.18))
+    this.setupPost()
 
     this.buildArena()
-    this.field = buildField(this.scene, this.env, [
+    this.field = buildField(this.scene, null, [
       { x: 0, z: 12.5, r: 2.3 }, { x: 0, z: -12.5, r: 2.3 },
       { x: -4.2, z: 8.5, r: 1.8 }, { x: 4.2, z: 8.5, r: 1.8 }, { x: -4.2, z: -8.5, r: 1.8 }, { x: 4.2, z: -8.5, r: 1.8 },
     ])
@@ -147,7 +144,7 @@ export class Engine {
     const crowdMat = new THREE.MeshStandardMaterial({ roughness: 0.9 })
     this.crowd = new THREE.InstancedMesh(crowdGeo, crowdMat, 420)
     const dummy = new THREE.Object3D()
-    const palette = [0xff5a5a, 0x5a8aff, 0xffd23d, 0x7dff8a, 0xff9ad5, 0xffffff, 0x9a7bff]
+    const palette = [0x6b3a32, 0x3a4a6b, 0x7a6a48, 0x4a5a3a, 0x5a4a5a, 0x8a8478, 0x3a3a40]
     for (let i = 0; i < 420; i++) {
       const side = i % 2 === 0 ? -1 : 1
       const x = -13 + Math.random() * 26
@@ -491,10 +488,66 @@ export class Engine {
     this.deployHint.spell.visible = kind === 'spell'
   }
 
+  private composer: EffectComposer | null = null
+
+  /** Sunset HDR sky: lights every PBR material (reflections + fill) and is the backdrop. */
+  private loadSky() {
+    new RGBELoader().load(`${import.meta.env.BASE_URL}textures/sky.hdr`, (hdr) => {
+      hdr.mapping = THREE.EquirectangularReflectionMapping
+      const pmrem = new THREE.PMREMGenerator(this.renderer)
+      const env = pmrem.fromEquirectangular(hdr).texture
+      pmrem.dispose()
+      this.env = env
+      this.scene.environment = env
+      this.scene.background = hdr
+      this.scene.backgroundIntensity = 0.55
+      this.scene.backgroundBlurriness = 0.05
+      setHeroEnvironment(env)
+    })
+  }
+
+  /**
+   * Post-processing: ambient occlusion (desktop), bloom on bright highlights,
+   * color grade + vignette, then tone mapping. Phones skip the AO pass.
+   */
+  private setupPost() {
+    const w = this.container.clientWidth || window.innerWidth, h = this.container.clientHeight || window.innerHeight
+    const phone = window.matchMedia?.('(pointer: coarse)').matches ?? false
+    const target = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: phone ? 0 : 4 })
+    const composer = new EffectComposer(this.renderer, target)
+    composer.setPixelRatio(this.renderer.getPixelRatio())
+    composer.addPass(new RenderPass(this.scene, this.camera))
+    if (!phone) {
+      const ao = new GTAOPass(this.scene, this.camera, w, h)
+      ao.blendIntensity = 0.85
+      ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.4, thickness: 1.2, scale: 1 })
+      composer.addPass(ao)
+    }
+    composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.35, 0.5, 0.92))
+    composer.addPass(new ShaderPass({
+      uniforms: { tDiffuse: { value: null }, uSat: { value: 0.92 }, uContrast: { value: 1.22 }, uGain: { value: new THREE.Vector3(1.04, 1.0, 0.94) }, uLift: { value: new THREE.Vector3(0.008, 0.006, 0.012) }, uVig: { value: 0.45 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform sampler2D tDiffuse; uniform float uSat; uniform float uContrast; uniform vec3 uGain; uniform vec3 uLift; uniform float uVig; varying vec2 vUv;
+        void main() {
+          vec4 c = texture2D(tDiffuse, vUv);
+          float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+          vec3 col = mix(vec3(l), c.rgb, uSat) * uGain + uLift;
+          // contrast around mid-grey, in linear light
+          col = max(vec3(0.0), (col - 0.18) * uContrast + 0.18);
+          float d = distance(vUv, vec2(0.5));
+          col *= mix(1.0, smoothstep(0.95, 0.3, d), uVig);
+          gl_FragColor = vec4(col, c.a);
+        }`,
+    }))
+    composer.addPass(new OutputPass())
+    this.composer = composer
+  }
+
   resize() {
     const w = this.container.clientWidth || window.innerWidth
     const h = this.container.clientHeight || window.innerHeight
     this.renderer.setSize(w, h)
+    this.composer?.setSize(w, h)
     this.camera.aspect = w / h
     // Portrait phones: widen the vertical FOV so the arena's width (both lanes)
     // still fits, instead of cropping to the middle.
@@ -625,7 +678,8 @@ export class Engine {
       this.camera.position.y += (Math.random() - 0.5) * this.shake * 0.4
     }
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 1.2)
-    this.renderer.render(this.scene, this.camera)
+    if (this.composer) this.composer.render(dt)
+    else this.renderer.render(this.scene, this.camera)
   }
 
   moveFirst(dx: number, dy: number) {

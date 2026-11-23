@@ -2,6 +2,11 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { Side } from './types'
 import { TEAM_COLORS } from './hero'
+import { pbrSet, splatGround, triplanarPBR } from './pbr'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+
+/** Deeper, less toy-like team colors for cloth and roofs in the arena. */
+const ARENA_TEAM: Record<Side, number> = { blue: 0x24407e, red: 0x7e1c1c }
 
 // Arena dressing: sculpted towers + bridge (.glb from tools/arena), and the
 // field itself (grass, lanes, river, stone curbs) with procedural textures.
@@ -45,69 +50,8 @@ function canvasTex(w: number, h: number, draw: (g: CanvasRenderingContext2D, r: 
 const cache = new Map<string, THREE.Texture>()
 const once = (k: string, make: () => THREE.Texture) => cache.get(k) ?? (cache.set(k, make()), cache.get(k)!)
 
-/** Running-bond stone blocks with mortar; 1 tile = 6 courses x 3 blocks. */
-const brickTex = () => once('brick', () => canvasTex(512, 512, (g, r) => {
-  g.fillStyle = '#6e665c'; g.fillRect(0, 0, 512, 512)
-  const rows = 6, cols = 3, bh = 512 / rows, bw = 512 / cols
-  for (let y = 0; y < rows; y++) for (let x = -1; x <= cols; x++) {
-    const ox = (y % 2) * bw * 0.5 + x * bw + (r() - 0.5) * 6
-    const l = 150 + r() * 55, warm = r() * 14
-    g.fillStyle = `rgb(${l + warm},${l + warm * 0.6},${l - 4})`
-    const px = ox + 4, py = y * bh + 4, pw = bw - 8, ph = bh - 8
-    g.beginPath(); g.roundRect(px, py, pw, ph, 10); g.fill()
-    // bevel: light top edge, dark bottom edge, speckles
-    g.fillStyle = 'rgba(255,255,255,0.16)'; g.fillRect(px + 4, py + 2, pw - 8, 5)
-    g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(px + 4, py + ph - 7, pw - 8, 5)
-    for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(0,0,0,${0.05 + r() * 0.1})`; g.fillRect(px + r() * pw, py + r() * ph, 2 + r() * 3, 2 + r() * 3) }
-  }
-}, 11))
-/** Planks running along X. */
-const woodTex = () => once('wood', () => canvasTex(512, 512, (g, r) => {
-  g.fillStyle = '#4a2f1a'; g.fillRect(0, 0, 512, 512)
-  const n = 6, h = 512 / n
-  for (let i = 0; i < n; i++) {
-    const l = 120 + r() * 40
-    g.fillStyle = `rgb(${l + 40},${l + 6},${l - 34})`; g.fillRect(0, i * h + 3, 512, h - 6)
-    for (let k = 0; k < 26; k++) {
-      g.strokeStyle = `rgba(60,30,10,${0.12 + r() * 0.2})`; g.lineWidth = 1 + r() * 2
-      const y0 = i * h + 6 + r() * (h - 12)
-      g.beginPath(); g.moveTo(0, y0); g.bezierCurveTo(170, y0 + (r() - 0.5) * 10, 340, y0 + (r() - 0.5) * 10, 512, y0); g.stroke()
-    }
-    g.fillStyle = 'rgba(30,15,5,0.6)'; const jx = r() * 512; g.fillRect(jx, i * h + 3, 4, h - 6)
-  }
-}, 23))
-/** Overlapping roof shingles (white-grey; tinted by the team color). */
-const shingleTex = () => once('shingle', () => canvasTex(256, 256, (g, r) => {
-  g.fillStyle = '#8a8a8a'; g.fillRect(0, 0, 256, 256)
-  const rows = 8, cols = 6, h = 256 / rows, w = 256 / cols
-  for (let y = 0; y < rows; y++) for (let x = -1; x <= cols; x++) {
-    const ox = x * w + (y % 2) * w / 2, l = 200 + r() * 50
-    g.fillStyle = `rgb(${l},${l},${l})`
-    g.beginPath(); g.roundRect(ox + 2, y * h, w - 4, h + 6, [0, 0, 14, 14]); g.fill()
-    g.fillStyle = 'rgba(0,0,0,0.22)'; g.fillRect(ox + 2, y * h + h - 2, w - 4, 4)
-  }
-}, 37))
 
-/** Project `tex` from three sides in object space; tile size in meters. */
-function triplanar(mat: THREE.MeshStandardMaterial, tex: THREE.Texture, tile: number) {
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.triMap = { value: tex }
-    shader.uniforms.triScale = { value: 1 / tile }
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vTriPos;\nvarying vec3 vTriN;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTriPos = position;\nvTriN = normal;')
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform sampler2D triMap;\nuniform float triScale;\nvarying vec3 vTriPos;\nvarying vec3 vTriN;')
-      .replace('#include <map_fragment>', `
-        vec3 triW = pow(abs(normalize(vTriN)), vec3(4.0));
-        triW /= (triW.x + triW.y + triW.z);
-        vec3 triP = vTriPos * triScale;
-        vec4 triC = texture2D(triMap, triP.zy) * triW.x + texture2D(triMap, triP.xz) * triW.y + texture2D(triMap, triP.xy) * triW.z;
-        diffuseColor *= triC * 1.35;`)
-  }
-  mat.customProgramCacheKey = () => `tri-${tex.uuid}-${tile}`
-  mat.needsUpdate = true
-}
+
 
 // --- props ----------------------------------------------------------------------
 const matCache = new Map<string, THREE.Material>()
@@ -116,12 +60,14 @@ function dressMaterial(m: THREE.MeshStandardMaterial, side: Side | null, env: TH
   const hit = matCache.get(key)
   if (hit) return hit
   const c = m.clone()
-  c.envMap = env
-  c.envMapIntensity = c.name === 'Arena_Metal' ? 1.2 : 0.5
-  if (c.name === 'Arena_Stone') triplanar(c, brickTex(), 1.2)
-  if (c.name === 'Arena_Wood') triplanar(c, woodTex(), 0.9)
-  if (c.name === 'Arena_Roof') { triplanar(c, shingleTex(), 0.5); c.color.setHex(side ? TEAM_COLORS[side] : 0xffffff) }
-  if (c.name === 'Arena_Team' && side) c.color.setHex(TEAM_COLORS[side])
+  c.envMap = null // use scene.environment (the HDR sky once loaded)
+  void env
+  c.envMapIntensity = c.name === 'Arena_Metal' ? 1.0 : 0.6
+  if (c.name === 'Arena_Stone') triplanarPBR(c, pbrSet('stone'), 2.0)
+  if (c.name === 'Arena_Wood') triplanarPBR(c, pbrSet('wood'), 1.4)
+  if (c.name === 'Arena_Roof') { c.color.setHex(side ? ARENA_TEAM[side] : 0xffffff).multiplyScalar(1.6); triplanarPBR(c, pbrSet('roof'), 1.0) }
+  if (c.name === 'Arena_Team' && side) c.color.setHex(ARENA_TEAM[side])
+  if (c.name === 'Arena_Metal') c.color.setHex(0xb39a6a) // antique gold rather than toy yellow
   matCache.set(key, c)
   return c
 }
@@ -144,51 +90,39 @@ export const makeBridge = (env: THREE.Texture | null) => instance('bridge', null
 // --- the field --------------------------------------------------------------------
 const FIELD_W = 26, FIELD_D = 30
 
-/** Mowed grass with stripes, worn dirt lanes and patches around the towers. */
-function groundTex(towers: { x: number; z: number; r: number }[]) {
-  const W = 1040, H = 1200, sx = W / FIELD_W, sz = H / FIELD_D
+/**
+ * Splat mask for the ground: red = how much dirt (lanes, around towers),
+ * green = broad brightness variation. Black = grass.
+ */
+function groundMask(towers: { x: number; z: number; r: number }[]) {
+  const W = 520, H = 600, sx = W / FIELD_W, sz = H / FIELD_D
   const toPx = (x: number, z: number) => [(x + FIELD_W / 2) * sx, (z + FIELD_D / 2) * sz]
   return canvasTex(W, H, (g, r) => {
-    // Mowing stripes across the field.
-    const stripe = 1.5 * sz
-    for (let y = 0; y < H; y += stripe) {
-      const odd = Math.round(y / stripe) % 2
-      g.fillStyle = odd ? '#5cab46' : '#54a141'; g.fillRect(0, y, W, stripe + 1)
+    g.fillStyle = 'rgb(0,128,0)'; g.fillRect(0, 0, W, H)
+    // Broad light/dark variation (green channel).
+    for (let i = 0; i < 260; i++) {
+      const v = Math.floor(70 + r() * 120)
+      g.fillStyle = `rgba(0,${v},0,0.18)`
+      g.beginPath(); g.arc(r() * W, r() * H, (1 + r() * 3) * sx, 0, Math.PI * 2); g.fill()
     }
-    // Blade speckle.
-    for (let i = 0; i < 26000; i++) {
-      const l = r()
-      g.fillStyle = l < 0.5 ? `rgba(40,90,30,${0.15 + r() * 0.2})` : `rgba(170,220,120,${0.08 + r() * 0.15})`
-      g.fillRect(r() * W, r() * H, 1 + r() * 2, 2 + r() * 4)
+    g.globalCompositeOperation = 'lighter'
+    const blob = (x: number, z: number, rad: number, a: number) => {
+      const [px, pz] = toPx(x, z)
+      const grad = g.createRadialGradient(px, pz, 0, px, pz, rad * sx)
+      grad.addColorStop(0, `rgba(255,0,0,${a})`); grad.addColorStop(1, 'rgba(255,0,0,0)')
+      g.fillStyle = grad; g.beginPath(); g.arc(px, pz, rad * sx, 0, Math.PI * 2); g.fill()
     }
-    // Worn dirt along both lanes, from tower to bridge.
-    const dirt = (x: number, z0: number, z1: number, w: number) => {
-      for (let i = 0; i < 900; i++) {
-        const z = z0 + (z1 - z0) * r()
-        const [px, pz] = toPx(x + (r() - 0.5) * w * (0.6 + r() * 0.6), z)
-        const rad = (0.12 + r() * 0.3) * sx
-        g.fillStyle = `rgba(${150 + r() * 30},${112 + r() * 20},${70 + r() * 14},${0.1 + r() * 0.16})`
-        g.beginPath(); g.arc(px, pz, rad, 0, Math.PI * 2); g.fill()
-      }
+    // Worn lanes from each tower to its bridge, plus scuffs around towers and bridges.
+    for (const x of [-4.2, 4.2]) for (const [z0, z1] of [[-11, -1.3], [1.3, 11]]) {
+      for (let i = 0; i < 140; i++) blob(x + (r() - 0.5) * 1.4, z0 + (z1 - z0) * r(), 0.5 + r() * 0.7, 0.16)
     }
-    for (const x of [-4.2, 4.2]) { dirt(x, -11, -1.5, 1.4); dirt(x, 1.5, 11, 1.4) }
-    for (const t of towers) {
-      for (let i = 0; i < 260; i++) {
-        const a = r() * Math.PI * 2, d = t.r * (0.85 + r() * 0.55)
-        const [px, pz] = toPx(t.x + Math.cos(a) * d, t.z + Math.sin(a) * d)
-        g.fillStyle = `rgba(${140 + r() * 30},${108 + r() * 20},${70 + r() * 14},${0.12 + r() * 0.18})`
-        g.beginPath(); g.arc(px, pz, (0.15 + r() * 0.3) * sx, 0, Math.PI * 2); g.fill()
-      }
+    for (const t of towers) for (let i = 0; i < 50; i++) {
+      const a = r() * Math.PI * 2, d = t.r * (0.7 + r() * 0.6)
+      blob(t.x + Math.cos(a) * d, t.z + Math.sin(a) * d, 0.5 + r() * 0.8, 0.2)
     }
-    // Faint chalk lane guides.
-    g.strokeStyle = 'rgba(255,255,255,0.18)'; g.lineWidth = 0.09 * sx; g.setLineDash([0.6 * sz, 0.5 * sz])
-    for (const x of [-4.2, 4.2]) { const [px] = toPx(x, 0); g.beginPath(); g.moveTo(px, toPx(0, -11)[1]); g.lineTo(px, toPx(0, -1.6)[1]); g.moveTo(px, toPx(0, 1.6)[1]); g.lineTo(px, toPx(0, 11)[1]); g.stroke() }
-    g.setLineDash([])
-    // Soft dark vignette at the edges.
-    const grad = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.7)
-    grad.addColorStop(0, 'rgba(0,0,0,0)'); grad.addColorStop(1, 'rgba(0,20,0,0.28)')
-    g.fillStyle = grad; g.fillRect(0, 0, W, H)
-  }, 5)
+    for (const x of [-4.2, 4.2]) for (const z of [-1.8, 1.8]) blob(x, z, 1.4, 0.6)
+    g.globalCompositeOperation = 'source-over'
+  }, 5, false)
 }
 /** Tileable ripple normal map for the river. */
 const waterNormals = () => once('waterN', () => canvasTex(256, 256, (g, r) => {
@@ -213,10 +147,86 @@ const waterNormals = () => once('waterN', () => canvasTex(256, 256, (g, r) => {
 
 export interface Field { water: THREE.MeshStandardMaterial; update(t: number): void }
 
+/** Alpha-tested grass blades, painted once. */
+const bladeTex = () => once('blades', () => canvasTex(128, 128, (g, r) => {
+  g.clearRect(0, 0, 128, 128)
+  for (let i = 0; i < 22; i++) {
+    const x = 10 + r() * 108, h = 60 + r() * 64, lean = (r() - 0.5) * 30, w = 3 + r() * 3
+    const l = 150 + r() * 90
+    g.fillStyle = `rgb(${l * 0.72},${l},${l * 0.5})`
+    g.beginPath(); g.moveTo(x - w, 128); g.quadraticCurveTo(x + lean * 0.4, 128 - h * 0.6, x + lean, 128 - h); g.lineTo(x + w, 128); g.closePath(); g.fill()
+  }
+}, 41))
+
+/** Is (x, z) open grass, i.e. not a lane, tower base, river or bridge approach? */
+function isOpenGrass(x: number, z: number, towers: { x: number; z: number; r: number }[]) {
+  if (Math.abs(z) < 1.8) return false
+  if (Math.abs(Math.abs(x) - 4.2) < 1.2 && Math.abs(z) < 11) return false
+  for (const t of towers) if (Math.hypot(x - t.x, z - t.z) < t.r + 0.6) return false
+  return Math.abs(x) < FIELD_W / 2 - 0.4 && Math.abs(z) < FIELD_D / 2 - 0.4
+}
+
+/** Instanced grass tufts (with wind) and pebbles scattered over open grass. */
+function scatterClutter(scene: THREE.Scene, towers: { x: number; z: number; r: number }[], phone: boolean) {
+  const rand = rng(77)
+  const pick = (n: number) => {
+    const out: [number, number][] = []
+    for (let tries = 0; out.length < n && tries < n * 20; tries++) {
+      const x = (rand() - 0.5) * FIELD_W, z = (rand() - 0.5) * FIELD_D
+      if (isOpenGrass(x, z, towers)) out.push([x, z])
+    }
+    return out
+  }
+  // Grass: three crossed quads per tuft.
+  const quads = [0, 1, 2].map((i) => { const q = new THREE.PlaneGeometry(0.5, 0.38); q.translate(0, 0.19, 0); q.rotateY((i * Math.PI) / 3); return q })
+  const tuftGeo = mergeGeometries(quads)!
+  // Foliage trick: light the cards as if they were the ground they grow from,
+  // instead of by their own vertical facing (which renders them nearly black).
+  const nrm = tuftGeo.attributes.normal
+  for (let i = 0; i < nrm.count; i++) nrm.setXYZ(i, 0, 1, 0)
+  const windT = { value: 0 }
+  const grassMat = new THREE.MeshStandardMaterial({ map: bladeTex(), alphaTest: 0.45, alphaToCoverage: !phone, side: THREE.DoubleSide, roughness: 0.95, color: 0xffffff })
+  grassMat.onBeforeCompile = (sh) => {
+    sh.uniforms.windT = windT
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform float windT;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vec3 ip = vec3(instanceMatrix[3][0], 0.0, instanceMatrix[3][2]);
+        float sway = sin(windT * 1.7 + ip.x * 0.7 + ip.z * 0.4) * 0.06 + sin(windT * 3.1 + ip.z) * 0.02;
+        transformed.x += sway * uv.y * uv.y;`)
+  }
+  const spots = pick(phone ? 900 : 2000)
+  const tufts = new THREE.InstancedMesh(tuftGeo, grassMat, spots.length)
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), c = new THREE.Color()
+  spots.forEach(([x, z], i) => {
+    const k = 0.45 + rand() * 0.6
+    m.compose(new THREE.Vector3(x, 0, z), q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand() * Math.PI), sc.set(k, k * (0.7 + rand() * 0.6), k))
+    tufts.setMatrixAt(i, m)
+    tufts.setColorAt(i, c.setHSL(0.2 + rand() * 0.07, 0.3 + rand() * 0.2, 0.4 + rand() * 0.2))
+  })
+  tufts.receiveShadow = true
+  scene.add(tufts)
+  // Pebbles and small stones.
+  const pebbleMat = new THREE.MeshStandardMaterial({ color: 0x9c968c, roughness: 0.95, flatShading: true })
+  const stones = pick(phone ? 90 : 200)
+  const pebbles = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), pebbleMat, stones.length)
+  stones.forEach(([x, z], i) => {
+    const k = 0.03 + Math.pow(rand(), 3) * 0.1
+    m.compose(new THREE.Vector3(x, k * 0.25, z), q.setFromEuler(new THREE.Euler(rand() * 3, rand() * 3, rand() * 3)), sc.set(k * (1 + rand() * 0.6), k * (0.5 + rand() * 0.4), k))
+    pebbles.setMatrixAt(i, m)
+    pebbles.setColorAt(i, c.setHSL(0.08, 0.06, 0.45 + rand() * 0.25))
+  })
+  pebbles.castShadow = !phone
+  pebbles.receiveShadow = true
+  scene.add(pebbles)
+  return (t: number) => { windT.value = t }
+}
+
 /** Grass, river with stone banks, a stone curb around the field. */
 export function buildField(scene: THREE.Scene, env: THREE.Texture | null, towers: { x: number; z: number; r: number }[]): Field {
   // Two grass halves leave a gap for the river; UVs map both onto one texture.
-  const groundMat = new THREE.MeshStandardMaterial({ map: groundTex(towers), roughness: 0.95 })
+  const groundMat = new THREE.MeshStandardMaterial({ roughness: 1, envMap: env, envMapIntensity: 0.4 })
+  splatGround(groundMat, groundMask(towers), pbrSet('grass'), pbrSet('dirt'), [FIELD_W, FIELD_D], 3.2)
   for (const [z0, z1] of [[-FIELD_D / 2, -1.3], [1.3, FIELD_D / 2]]) {
     const geo = new THREE.PlaneGeometry(FIELD_W, z1 - z0)
     geo.rotateX(-Math.PI / 2)
@@ -228,13 +238,13 @@ export function buildField(scene: THREE.Scene, env: THREE.Texture | null, towers
     scene.add(half)
   }
 
-  const stone = new THREE.MeshStandardMaterial({ color: 0xd9d1c4, roughness: 0.9, envMap: env, envMapIntensity: 0.4 })
-  triplanar(stone, brickTex(), 1.0)
+  const stone = new THREE.MeshStandardMaterial({ color: 0xc8c2b8, roughness: 1, envMap: env, envMapIntensity: 0.5 })
+  triplanarPBR(stone, pbrSet('rock'), 1.6)
   // River bed + water surface.
-  const bed = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.3, 2.6), new THREE.MeshStandardMaterial({ color: 0x1d4f6b, roughness: 1 }))
+  const bed = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.3, 2.6), new THREE.MeshStandardMaterial({ color: 0x0f2a33, roughness: 1 }))
   bed.position.set(0, -0.32, 0); scene.add(bed)
   const n = waterNormals(); n.repeat.set(10, 1)
-  const water = new THREE.MeshStandardMaterial({ color: 0x2f8fc4, roughness: 0.12, metalness: 0.05, normalMap: n, normalScale: new THREE.Vector2(0.6, 0.6), envMap: env, envMapIntensity: 1.1, transparent: true, opacity: 0.9 })
+  const water = new THREE.MeshStandardMaterial({ color: 0x1e5566, roughness: 0.12, metalness: 0.05, normalMap: n, normalScale: new THREE.Vector2(0.6, 0.6), envMap: env, envMapIntensity: 1.1, transparent: true, opacity: 0.9 })
   const surf = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_W, 2.6), water)
   surf.rotation.x = -Math.PI / 2; surf.position.y = -0.06; surf.receiveShadow = true; scene.add(surf)
   // Stone banks along both edges of the river.
@@ -243,14 +253,16 @@ export function buildField(scene: THREE.Scene, env: THREE.Texture | null, towers
     bank.position.set(0, -0.05, s * 1.36); bank.castShadow = true; bank.receiveShadow = true; scene.add(bank)
   }
   // Packed earth beyond the field, so the arena doesn't float in the sky.
-  const outer = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), new THREE.MeshStandardMaterial({ color: 0x6f5a3e, roughness: 1 }))
+  const dirt = pbrSet('dirt'), outerMap = dirt.color.clone(), outerN = dirt.normal.clone()
+  outerMap.repeat.set(40, 40); outerN.repeat.set(40, 40)
+  const outer = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), new THREE.MeshStandardMaterial({ map: outerMap, normalMap: outerN, color: 0x8a7a68, roughness: 1 }))
   outer.rotation.x = -Math.PI / 2; outer.position.y = -0.55; outer.receiveShadow = true; scene.add(outer)
   // Low stone walls along both touchlines, each with a team banner at midfield.
   for (const s of [-1, 1]) {
     const wall = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.3, FIELD_D + 1.2), stone)
     wall.position.set(s * (FIELD_W / 2 + 0.75), 0.65, 0); wall.castShadow = true; wall.receiveShadow = true; scene.add(wall)
     for (const z of [-8, 8]) {
-      const banner = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.7), new THREE.MeshStandardMaterial({ color: z > 0 ? TEAM_COLORS.blue : TEAM_COLORS.red, roughness: 0.8, side: THREE.DoubleSide }))
+      const banner = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.7), new THREE.MeshStandardMaterial({ color: z > 0 ? ARENA_TEAM.blue : ARENA_TEAM.red, roughness: 0.9, side: THREE.DoubleSide }))
       banner.position.set(s * (FIELD_W / 2 + 0.38), 1.1, z); banner.rotation.y = -s * Math.PI / 2; scene.add(banner)
     }
   }
@@ -260,8 +272,9 @@ export function buildField(scene: THREE.Scene, env: THREE.Texture | null, towers
     const c = new THREE.Mesh(new THREE.BoxGeometry(w, 0.45, d), stone)
     c.position.set(x, 0.18, z); c.castShadow = true; c.receiveShadow = true; scene.add(c)
   }
+  const wind = scatterClutter(scene, towers, window.matchMedia?.('(pointer: coarse)').matches ?? false)
   return {
     water,
-    update(t: number) { n.offset.set(t * 0.035, Math.sin(t * 0.4) * 0.02) },
+    update(t: number) { n.offset.set(t * 0.035, Math.sin(t * 0.4) * 0.02); wind(t) },
   }
 }
