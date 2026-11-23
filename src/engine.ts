@@ -117,6 +117,10 @@ export class Engine {
       m.renderOrder = 1
       this.scene.add(m)
     }
+    // A bright line along the front edge of the deploy zone reads better than a heavy tint.
+    const edge = new THREE.Mesh(new THREE.PlaneGeometry(22, 0.14), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.5, 1.2, 3), transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false }))
+    edge.position.set(0, 6.5 - 0.07, 0.01) // local +Y is toward the river once the plane lies flat
+    this.deployHint.troop.add(edge)
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200)
     this.camera.position.set(0, 14, 16)
     this.vfx = new Vfx(this.scene, this.camera, container, LOW_POWER)
@@ -361,6 +365,10 @@ export class Engine {
     group.lookAt(to)
     this.scene.add(group)
     this.vfx.muzzle(from, to, shot.kind)
+    // Whoever fired turns to face the target, so the aimed weapon points along the shot.
+    for (const h of this.heroes.values()) {
+      if (Math.hypot(h.x - from.x, h.z - from.z) < 0.35) h.yaw = Math.atan2(to.x - from.x, to.z - from.z)
+    }
     this.projectiles.push({ group, from, to, kind: shot.kind, t: 0, dur: Math.max(0.15, dist / speed), arc, trail: this.vfx.projectileTrail(shot.kind) })
   }
 
@@ -690,8 +698,8 @@ export class Engine {
     this.crowd.instanceMatrix.needsUpdate = true
 
     // Deploy hint pulses gently.
-    ;(this.deployHint.troop.material as THREE.MeshBasicMaterial).opacity = 0.05 + Math.sin(t * 4) * 0.02
-    ;(this.deployHint.spell.material as THREE.MeshBasicMaterial).opacity = 0.04 + Math.sin(t * 4) * 0.015
+    ;(this.deployHint.troop.material as THREE.MeshBasicMaterial).opacity = 0.014 + Math.sin(t * 4) * 0.006
+    ;(this.deployHint.spell.material as THREE.MeshBasicMaterial).opacity = 0.012 + Math.sin(t * 4) * 0.005
 
     // Troop meshes
     for (const tr of troops) {

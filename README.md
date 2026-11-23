@@ -109,7 +109,7 @@ Requires Node 18+.
 | Action | Control |
 | --- | --- |
 | Select a card | Click / tap a hand card |
-| Deploy | Tap your (highlighted) side of the arena, or the Deploy left / right buttons. Fireball can be tapped anywhere |
+| Deploy | Tap a card, then tap your side of the arena (marked by a blue line at the river). Fireball can be tapped anywhere |
 | Zoom | Pinch, mouse wheel, or the − / + buttons (Broadcast and Orbit cameras) |
 | Camera | Broadcast / Orbit / 1st Person buttons, Ride troop |
 | Move (1st Person) | WASD or arrow keys, or the on-screen joystick |

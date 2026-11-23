@@ -23,7 +23,6 @@ h1 span{color:#ffd23d}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;width:min(920px,100%);margin-top:12px}
 .deckcard{cursor:pointer;text-align:left;background:rgba(255,255,255,.07);border:2px solid rgba(255,255,255,.14);border-radius:14px;padding:10px;min-height:96px}
 .deckcard.sel{border-color:#ffd23d;background:rgba(255,210,61,.14);box-shadow:0 0 0 2px rgba(255,210,61,.35)}
-.deckcard .em{font-size:26px}
 .deckcard b{display:block;margin:4px 0 2px}
 .deckcard small{opacity:.8;line-height:1.35;display:block}
 .cost{float:right;background:#7b5cff;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:800}
@@ -37,18 +36,8 @@ h1 span{color:#ffd23d}
 #banner{font-size:clamp(26px,5vw,44px);font-weight:900;text-shadow:0 4px 0 rgba(0,0,0,.5);animation:slam .35s ease-out}
 #bannerSub{font-weight:700;opacity:.9;text-shadow:0 2px 6px #000}
 @keyframes slam{from{transform:scale(1.6);opacity:0}to{transform:scale(1);opacity:1}}
-#elixirWrap{width:min(420px,72vw);margin:0 auto}
-#elixirBar{height:12px;border-radius:999px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.3);overflow:hidden}
-#elixirFill{height:100%;width:50%;background:linear-gradient(90deg,#ff4dd2,#b45cff);transition:width .2s}
 #elixirFill.full{animation:pulse 1s infinite}
 @keyframes pulse{50%{filter:brightness(1.6)}}
-#hand{pointer-events:auto;display:flex;gap:8px;justify-content:center;padding:10px;align-items:flex-end}
-.handcard{cursor:pointer;width:76px;background:rgba(16,22,48,.92);border:2px solid rgba(255,255,255,.2);border-radius:12px;padding:8px 6px;text-align:center;position:relative}
-.handcard.sel{border-color:#ffd23d;transform:translateY(-8px)}
-.handcard.disabled{opacity:.45}
-.handcard .em{font-size:26px}
-.handcard b{font-size:12px;display:block}
-.handcard .cost{position:absolute;top:-8px;left:-6px}
 #camBar{position:absolute;top:64px;right:10px;display:flex;flex-direction:column;gap:6px}
 #camBar button{pointer-events:auto}
 #emoteBar{position:absolute;top:64px;left:10px;display:flex;flex-direction:column;gap:6px}
@@ -59,7 +48,7 @@ h1 span{color:#ffd23d}
 #toast{position:absolute;top:110px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.7);padding:8px 14px;border-radius:999px;font-weight:700}
 table{width:100%;border-collapse:collapse;font-size:14px}
 td,th{padding:6px 8px;text-align:left;border-bottom:1px solid rgba(255,255,255,.1)}
-@media (max-width:640px){.handcard{width:62px}.handcard .em{font-size:22px}#joy{bottom:130px}}
+@media (max-width:640px){#joy{bottom:190px}}
 
 /* Deploy controls must take taps (the HUD container lets taps fall through to the arena). */
 #deployBar{pointer-events:auto;padding:0 10px 4px}
@@ -102,12 +91,6 @@ td,th{padding:6px 8px;text-align:left;border-bottom:1px solid rgba(255,255,255,.
   #hud .top .btn.small{padding:5px 10px;font-size:13px}
   #timer{font-size:18px}
   #camBar,#emoteBar{top:calc(48px + env(safe-area-inset-top))}
-  #elixirWrap{width:min(360px,50vw)}
-  #hand{padding:6px 10px 4px;gap:6px}
-  .handcard{width:56px;padding:4px}
-  .handcard .em{font-size:18px}
-  .handcard b{font-size:10px}
-  #deployBar .btn.small{padding:6px 12px;font-size:13px}
   #deployHint{display:none}
 }
 
@@ -115,3 +98,51 @@ td,th{padding:6px 8px;text-align:left;border-bottom:1px solid rgba(255,255,255,.
 #versionBar{position:absolute;left:12px;bottom:calc(12px + env(safe-area-inset-bottom));display:flex;gap:8px;align-items:center;z-index:6;font-size:12px;opacity:.9}
 #versionBar span{background:rgba(0,0,0,.45);padding:6px 10px;border-radius:999px;font-variant-numeric:tabular-nums}
 #updatePill{position:absolute;left:50%;transform:translateX(-50%);top:calc(100px + env(safe-area-inset-top));z-index:6;background:rgba(20,120,60,.9);padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap;pointer-events:none}
+
+/* ---------- Cards: 3D portrait in a rarity frame ---------- */
+.gcard{--cw:clamp(72px,20.5vw,122px);position:relative;display:block;width:var(--cw);aspect-ratio:4/5;flex:none;padding:0;border-radius:13px;border:2px solid rgba(255,255,255,.34);cursor:pointer;pointer-events:auto;
+  background:linear-gradient(165deg,var(--c1),var(--c2));box-shadow:0 7px 16px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.4),inset 0 -10px 18px rgba(0,0,0,.28);transition:transform .12s ease,box-shadow .12s ease,border-color .12s;-webkit-tap-highlight-color:transparent}
+.gcard.r-Common{--c1:#8fb3da;--c2:#34506f}
+.gcard.r-Rare{--c1:#f7b455;--c2:#8e4a10}
+.gcard.r-Epic{--c1:#c48bff;--c2:#4c2390}
+.gcard-art{position:absolute;inset:0;border-radius:11px;overflow:hidden;background:radial-gradient(ellipse at 50% 30%,rgba(255,255,255,.34),transparent 62%)}
+.gcard-art img{width:100%;height:100%;object-fit:cover;object-position:50% 18%;display:block;filter:drop-shadow(0 3px 4px rgba(0,0,0,.45));user-select:none;-webkit-user-drag:none}
+.gcard-shine{position:absolute;inset:0;border-radius:11px;pointer-events:none;background:linear-gradient(125deg,rgba(255,255,255,.26) 0%,transparent 34%)}
+.gcard-name{position:absolute;left:0;right:0;bottom:0;padding:16px 3px 5px;border-radius:0 0 11px 11px;background:linear-gradient(transparent,rgba(8,10,24,.86) 62%);color:#fff;font-weight:800;font-size:clamp(11px,2.9vw,14px);line-height:1.08;text-align:center;text-shadow:0 1px 2px #000;text-wrap:balance}
+.gcard-cost{position:absolute;top:-10px;left:-9px;width:30px;height:32px;display:grid;place-items:center;padding-top:4px;color:#fff;font-weight:900;font-size:16px;text-shadow:0 1px 2px rgba(0,0,0,.8);
+  background:radial-gradient(circle at 36% 34%,#ffb3ff,#d43df0 46%,#7b17a8);border:2px solid rgba(255,255,255,.75);border-radius:50% 50% 50% 50%/62% 62% 42% 42%;box-shadow:0 2px 6px rgba(0,0,0,.5)}
+.gcard.sel{transform:translateY(-14px) scale(1.06);border-color:#ffd84a;box-shadow:0 0 0 3px rgba(255,216,74,.45),0 14px 26px rgba(0,0,0,.55),0 0 26px rgba(255,216,74,.35)}
+.gcard.disabled .gcard-art img{filter:grayscale(.9) brightness(.5)}
+.gcard.disabled{border-color:rgba(255,255,255,.16)}
+.gcard.disabled .gcard-cost{background:radial-gradient(circle at 36% 34%,#b98a8a,#8a3a3a 46%,#4a1a1a)}
+.gcard.mini{--cw:clamp(40px,10vw,54px);border-radius:9px;cursor:default;border-width:1.5px}
+.gcard.mini .gcard-art,.gcard.mini .gcard-shine{border-radius:7px}
+.gcard.mini .gcard-cost{width:20px;height:21px;font-size:11px;top:-7px;left:-6px;padding-top:2px;border-width:1.5px}
+.gcard.deck{--cw:100%;cursor:inherit;margin-bottom:8px;pointer-events:none}
+
+/* ---------- Battle hand ---------- */
+#handDock{pointer-events:none;padding:0 8px calc(8px + env(safe-area-inset-bottom));background:linear-gradient(transparent,rgba(6,8,20,.55) 45%)}
+#hand{pointer-events:none;display:flex;gap:clamp(6px,2vw,12px);justify-content:center;align-items:flex-end;padding:12px 4px 6px}
+#nextCard{display:flex;align-items:center;gap:6px;flex:none;opacity:.95}
+#nextCard small{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;opacity:.8;text-shadow:0 1px 2px #000}
+#elixirWrap{display:flex;align-items:center;gap:8px;width:min(520px,94%);margin:0 auto}
+#elixirCount{flex:none;width:34px;height:36px;display:grid;place-items:center;padding-top:4px;font-weight:900;font-size:18px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.8);
+  background:radial-gradient(circle at 36% 34%,#ffb3ff,#d43df0 46%,#7b17a8);border:2px solid rgba(255,255,255,.8);border-radius:50% 50% 50% 50%/62% 62% 42% 42%;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+#elixirCount.full{animation:pulse 1s infinite}
+#elixirBar{flex:1;height:16px;border-radius:999px;background:rgba(0,0,0,.6);border:1.5px solid rgba(255,255,255,.35);overflow:hidden;position:relative}
+#elixirBar::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(10% - 1.5px),rgba(0,0,0,.55) calc(10% - 1.5px),rgba(0,0,0,.55) 10%);pointer-events:none}
+#elixirFill{height:100%;background:linear-gradient(180deg,#ff8df2,#d43df0 55%,#9a22c8);box-shadow:inset 0 2px 0 rgba(255,255,255,.45);transition:width .15s linear}
+#deployHint{text-align:center;font-size:11.5px;opacity:.75;padding:2px 12px 0;text-shadow:0 1px 4px #000}
+@media (max-height:500px){
+  .gcard{--cw:62px}
+  .gcard.sel{transform:translateY(-8px) scale(1.04)}
+  #hand{padding:8px 4px 2px}
+  #elixirWrap{width:min(420px,70%)}
+  #elixirBar{height:12px}
+  #elixirCount{width:26px;height:28px;font-size:14px}
+}
+
+/* ---------- Deck builder tiles ---------- */
+.deckcard{display:flex;flex-direction:column}
+.deckcard .gcard.deck{aspect-ratio:5/4}
+.deckcard .gcard.deck .gcard-art img{object-position:50% 22%}

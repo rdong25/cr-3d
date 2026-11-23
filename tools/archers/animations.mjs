@@ -72,86 +72,99 @@ function keyed(keys) {
   }
 }
 
+// --- bow handling, solved by IK ------------------------------------------------
+// Poses say where the BOW is (chest space) and where the string hand goes;
+// tools/hero/ik.mjs bends both arms to match.
+import { BONES } from './design.mjs'
+import { makeRig, holdProp } from '../hero/ik.mjs'
+
+const rig = makeRig(BONES)
+// Bind pose (design.mjs): grip at the left fist, arrow pointing down the arm, limbs fore and aft.
+const BOW = { gripRest: [0.52, 0.62, 0.03], dirRest: [0, -1, 0], upRest: [0, 0, 1], handLen: 0.05 }
+/** Carried low at the left side, arrow nocked and pointing ahead and down; string hand resting on it. */
+const LOW = { propGrip: [0.22, -0.1, 0.3], propDir: [-0.05, -0.3, 0.95], propUp: [0.35, 0.85, 0.3], supportAt: [-0.1, -0.06, 0.3] }
+/** Full draw, body side-on (left shoulder to the target): bow arm straight out, string hand at the jaw. */
+const DRAWN = { propGrip: [0.63, 0.19, 0.24], propDir: [0.78, 0, 0.62], propUp: [0.08, 1, -0.06], supportAt: [0.02, 0.3, 0.16] }
+const withBow = (fn) => (t) => {
+  const p = fn(t)
+  return holdProp(rig, { ...p, prop: { grip: p.propGrip, dir: p.propDir, up: p.propUp }, support: p.supportAt }, 'L', BOW)
+}
+/** Side-on shooting stance, head turned over the bow shoulder. */
+function drawStance() {
+  return {
+    ...stance(0), ...DRAWN,
+    hips: [0, -0.4, 0], spine: [0.02, -0.25, 0.03], chest: [-0.03, -0.25, 0.03],
+    neck: [0, 0.4, 0], head: [0.02, 0.5, -0.06],
+    thigh_L: [-0.28, 0, 0.12], shin_L: [0.22, 0, 0], foot_L: [0.02, 0, -0.12],
+    thigh_R: [0.24, 0, -0.14], shin_R: [0.2, 0, 0], foot_R: [-0.42, 0, 0.14],
+    pos: { hips: [0, -0.04, 0] },
+  }
+}
+
 export const CLIPS = [
   {
     name: 'Idle', duration: 2.4, loop: true,
-    pose: (t) => {
+    pose: withBow((t) => {
       const ph = (t / 2.4) * TAU
       const b = Math.sin(ph)
-      return layer(stance(b), {
-        head: [Math.sin(ph * 2) * 0.015, Math.sin(ph * 0.5) * 0.18, 0],
+      return layer({ ...stance(b), ...LOW }, {
+        head: [Math.sin(ph * 2) * 0.015, Math.sin(ph) * 0.14, 0],
         chest: [0, Math.sin(ph) * 0.03, 0],
-        upperarm_L: [Math.sin(ph + 1) * 0.02, 0, 0],
-        upperarm_R: [Math.sin(ph + 1.4) * 0.025, 0, 0],
+        propGrip: [0, b * 0.008, 0], propDir: [Math.sin(ph + 1) * 0.04, 0, 0],
         tabard_F: [Math.sin(ph + 0.6) * 0.03, 0, 0],
         cape_1: [Math.sin(ph - 0.5) * 0.02, 0, 0], cape_2: [Math.sin(ph - 1.2) * 0.035, 0, Math.sin(ph) * 0.02], cape_3: [Math.sin(ph - 2) * 0.05, 0, Math.sin(ph - 0.8) * 0.03],
       })
-    },
+    }),
   },
   {
-    // Light, quick step. One cycle = two steps.
+    // Light, quick jog with the bow carried low. One cycle = two steps.
     name: 'Walk', duration: 0.9, loop: true,
-    pose: (t) => {
+    pose: withBow((t) => {
       const ph = (t / 0.9) * TAU
       const s = Math.sin(ph), c = Math.cos(ph)
-      const thighL = -0.45 * s, thighR = 0.45 * s
-      const kneeL = 0.08 + 0.9 * Math.pow(Math.max(0, c), 1.4)
-      const kneeR = 0.08 + 0.9 * Math.pow(Math.max(0, -c), 1.4)
-      const base = stance(0)
+      const thighL = -0.55 * s, thighR = 0.55 * s
+      const kneeL = 0.1 + 0.85 * Math.pow(Math.max(0, c), 1.4)
+      const kneeR = 0.1 + 0.85 * Math.pow(Math.max(0, -c), 1.4)
       return {
-        ...base,
-        hips: [0, 0.1 * s, 0.04 * s],
-        spine: [0.08, -0.05 * s, -0.02 * s],
-        chest: [-0.02, -0.1 * s, 0],
-        neck: [0, 0.03 * s, 0],
-        head: [-0.04 + 0.02 * Math.cos(ph * 2), 0.03 * s, 0],
+        ...stance(0), ...LOW,
+        propGrip: [LOW.propGrip[0], LOW.propGrip[1] + 0.015 * Math.cos(ph * 2), LOW.propGrip[2] + 0.03 * s],
+        supportAt: [LOW.supportAt[0], LOW.supportAt[1] + 0.015 * Math.cos(ph * 2), LOW.supportAt[2] + 0.02 * s],
+        hips: [0, 0.13 * s, 0.05 * s],
+        spine: [0.12, -0.06 * s, -0.03 * s],
+        chest: [-0.02, -0.12 * s, 0],
+        neck: [0, 0.04 * s, 0],
+        head: [-0.06 + 0.025 * Math.cos(ph * 2), 0.04 * s, 0],
         thigh_L: [thighL, 0, 0.03], shin_L: [kneeL, 0, 0], foot_L: [-(thighL + kneeL) * 0.75, 0, -0.03],
         thigh_R: [thighR, 0, -0.03], shin_R: [kneeR, 0, 0], foot_R: [-(thighR + kneeR) * 0.75, 0, 0.03],
-        // Bow arm stays forward and steady; draw hand swings a little.
-        upperarm_L: [-1.1 + 0.06 * s, 0, 0.14], forearm_L: [-0.15, 0, 0],
-        upperarm_R: [-0.35 - 0.18 * s, 0, -0.35], forearm_R: [-1.15 - 0.1 * Math.max(0, -s), 0.2, 0], hand_R: [0.1, 0, 0],
         tabard_F: [Math.min(thighL, thighR) * 0.85 - 0.04, 0, 0],
         cape_1: [0.2 + 0.03 * Math.cos(ph * 2), 0, -0.04 * s], cape_2: [0.1 + 0.06 * Math.sin(ph * 2 - 1), 0, -0.05 * Math.sin(ph - 0.6)],
         cape_3: [0.1 + 0.08 * Math.sin(ph * 2 - 2), 0, -0.07 * Math.sin(ph - 1.2)],
-        pos: { hips: [0, -0.02 + 0.03 * Math.cos(ph * 2), 0] },
+        pos: { hips: [0, -0.03 + 0.025 * Math.cos(ph * 2), 0] },
       }
-    },
+    }),
   },
   {
-    // Bow draw: left arm extends to aim, right hand pulls back to the cheek,
-    // release (string snaps forward ~0.48s), recovery.
+    // Draw, loose, follow through, lower. The game starts this clip at 0.12 s,
+    // the instant the arrow leaves, so that frame is the release.
     name: 'Attack', duration: 0.9, loop: false,
-    pose: (() => {
-      const ready = stance(0)
-      const draw = layer(ready, {
-        hips: [0, 0.12, 0], spine: [0.06, 0.14, 0], chest: [0.02, 0.18, -0.03], head: [-0.04, -0.12, 0],
-        // Left arm straight out to aim (bow vertical, arrow forward).
-        upperarm_L: [-1.35, 0, 0.08], forearm_L: [-0.12, 0, 0], hand_L: [0, 0, 0],
-        // Right hand pulls the string back to the cheek.
-        upperarm_R: [-0.55, 0, -0.15], forearm_R: [-2.3, 0.35, 0], hand_R: [0.2, 0, 0],
-        thigh_L: [-0.2, 0, 0], shin_L: [0.14, 0, 0], thigh_R: [0.14, 0, 0], shin_R: [0.16, 0, 0],
-        tabard_F: [-0.1, 0, 0],
-        pos: { hips: [0, -0.01, 0.02] },
+    pose: withBow((() => {
+      const ready = { ...stance(0), ...LOW }
+      const drawn = drawStance()
+      // Release: the string hand snaps back past the ear, the bow arm pushes on and the bow tips forward.
+      const loose = layer(drawn, {
+        supportAt: [-0.2, 0.04, -0.14], propGrip: [0.02, -0.01, 0.015], propUp: [0, 0, 0.22],
+        chest: [0, -0.05, 0], head: [0, 0.03, 0],
       })
-      const release = layer(ready, {
-        hips: [0, 0.1, 0], spine: [0.1, 0.1, 0], chest: [0.04, 0.14, -0.03], head: [-0.06, -0.1, 0],
-        upperarm_L: [-1.4, 0, 0.08], forearm_L: [-0.1, 0, 0], hand_L: [0.05, 0, 0],
-        // Draw hand snaps forward as the string is loosed.
-        upperarm_R: [-0.9, 0, -0.25], forearm_R: [-0.9, 0.1, 0], hand_R: [0.1, 0, 0],
-        thigh_L: [-0.22, 0, 0], shin_L: [0.16, 0, 0], thigh_R: [0.14, 0, 0], shin_R: [0.16, 0, 0],
-        tabard_F: [-0.12, 0, 0],
-        pos: { hips: [0, -0.02, 0.03] },
-      })
-      const follow = layer(release, { upperarm_R: [0.15, 0, 0.05], forearm_R: [0.15, 0, 0], spine: [-0.02, 0, 0] })
+      const hold = layer(drawn, { supportAt: [-0.14, -0.02, -0.08], propUp: [0, 0, 0.12] })
       const fast = (t) => 1 - Math.pow(1 - t, 3)
       return keyed([
         { t: 0, pose: ready },
-        { t: 0.35, pose: draw },
-        { t: 0.48, pose: release, ease: fast },
-        { t: 0.6, pose: follow },
+        { t: 0.115, pose: drawn, ease: fast },
+        { t: 0.2, pose: loose, ease: fast },
+        { t: 0.5, pose: hold },
         { t: 0.9, pose: ready },
       ])
-    })(),
+    })()),
   },
   {
     // Knocked back, buckles, topples onto its back. Holds the last frame.

@@ -196,7 +196,8 @@ const clips = CLIPS.map((clip) => {
     const pose = clip.pose(clip.loop && f === frames - 1 ? 0 : t)
     for (const b of BONES) {
       const r = pose[b.name] || [0, 0, 0]
-      e.set(r[0], r[1], r[2], 'XYZ'); q.setFromEuler(e)
+      if (r.q) q.set(r.q[0], r.q[1], r.q[2], r.q[3]) // solved by IK (tools/hero/ik.mjs)
+      else { e.set(r[0], r[1], r[2], 'XYZ'); q.setFromEuler(e) }
       quats.get(b.name).set([q.x, q.y, q.z, q.w], f * 4)
     }
     for (const name of posTracked) {

@@ -55,6 +55,8 @@ export function preloadHero(cardId: HeroCardId = 'knight'): Promise<Asset> {
 /** Start fetching every hero model right away; troops fall back to the procedural rig until theirs loads. */
 export function preloadHeroes(): Promise<Asset>[] { return HERO_CARDS.map((c) => preloadHero(c)) }
 export const heroReady = (cardId: HeroCardId = 'knight') => assets.has(cardId)
+/** The loaded model and clips for a card, for rendering it outside the arena (card portraits). */
+export const heroAsset = (cardId: HeroCardId) => assets.get(cardId)
 
 // --- materials: one set per team per hero, shared by every instance --------------------------
 const materialSets = new Map<string, Map<string, THREE.MeshStandardMaterial>>()

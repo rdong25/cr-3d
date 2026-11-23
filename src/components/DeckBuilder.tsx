@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ALL_CARDS } from '../cards'
+import CardFace from './CardFace'
 import type { CardId, Profile } from '../types'
 
 interface Props {
@@ -36,8 +37,7 @@ export default function DeckBuilder({ profile, onSave, onBack }: Props) {
           const sel = deck.includes(c.id)
           return (
             <button key={c.id} className={`deckcard ${sel ? 'sel' : ''}`} onClick={() => toggle(c.id)}>
-              <span className="cost">💧{c.cost}</span>
-              <span className="em">{c.emoji}</span>
+              <CardFace id={c.id} size="deck" />
               <b>{c.name}</b>
               <span className={`rar ${c.rarity}`}>{c.rarity}</span>
               <small>{c.desc}</small>

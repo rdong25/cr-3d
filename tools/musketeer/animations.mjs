@@ -72,34 +72,61 @@ function keyed(keys) {
   }
 }
 
+// --- two-handed hold, solved by IK --------------------------------------------
+// Poses say where the MUSKET is (chest space); tools/hero/ik.mjs bends both
+// arms so the right hand is on the grip and the left hand on the forestock.
+import { BONES } from './design.mjs'
+import { makeRig, holdProp } from '../hero/ik.mjs'
+
+const rig = makeRig(BONES)
+const MUSKET = { gripRest: [-0.48, 0.64, 0.05], dirRest: [0.25, -0.55, 0.8] } // matches design.mjs
+/** Port arms: carried diagonally across the chest, muzzle up to the left. */
+const PORT = { propGrip: [-0.12, -0.12, 0.2], propDir: [0.6, 0.55, 0.35], propUp: [0, 1, 0], supportAt: [0.26, 0, 0] }
+/** Shouldered and level. The body is bladed ~43 degrees, so this chest-space direction is straight ahead. */
+const AIM = { propGrip: [-0.1, 0.15, 0.26], propDir: [0.68, 0, 0.73], propUp: [0, 1, 0], supportAt: [0.24, 0, 0] }
+const withGun = (fn) => (t) => {
+  const p = fn(t)
+  return holdProp(rig, { ...p, prop: { grip: p.propGrip, dir: p.propDir, up: p.propUp }, support: p.supportAt[0] }, 'R', MUSKET)
+}
+/** Bladed firing stance: right shoulder back, head turned to sight down the barrel. */
+function aimStance() {
+  return {
+    ...stance(0), ...AIM,
+    hips: [0, -0.3, 0], spine: [0.06, -0.22, 0], chest: [0.02, -0.23, 0],
+    neck: [0, 0.3, 0], head: [0.04, 0.45, 0.1],
+    thigh_L: [-0.3, 0, 0.1], shin_L: [0.28, 0, 0], foot_L: [-0.02, 0, -0.1],
+    thigh_R: [0.22, 0, -0.14], shin_R: [0.22, 0, 0], foot_R: [-0.4, 0, 0.14],
+    pos: { hips: [0, -0.045, 0.02] },
+  }
+}
+
 export const CLIPS = [
   {
     name: 'Idle', duration: 2.4, loop: true,
-    pose: (t) => {
+    pose: withGun((t) => {
       const ph = (t / 2.4) * TAU
       const b = Math.sin(ph)
-      return layer(stance(b), {
+      return layer({ ...stance(b), ...PORT }, {
         head: [Math.sin(ph * 2) * 0.015, Math.sin(ph) * 0.12, 0],
         chest: [0, Math.sin(ph) * 0.03, 0],
-        upperarm_R: [Math.sin(ph + 1) * 0.025, 0, 0],
-        upperarm_L: [Math.sin(ph + 1.2) * 0.025, 0, 0],
+        propGrip: [0, b * 0.008, 0], propDir: [Math.sin(ph + 1) * 0.03, 0, 0],
         tabard_F: [Math.sin(ph + 0.6) * 0.03, 0, 0],
         cape_1: [Math.sin(ph - 0.5) * 0.02, 0, 0], cape_2: [Math.sin(ph - 1.2) * 0.035, 0, Math.sin(ph) * 0.02], cape_3: [Math.sin(ph - 2) * 0.05, 0, Math.sin(ph - 0.8) * 0.03],
       })
-    },
+    }),
   },
   {
-    // Steady march, musket held across the body. One cycle = two steps.
+    // Steady march at port arms. One cycle = two steps.
     name: 'Walk', duration: 0.9, loop: true,
-    pose: (t) => {
+    pose: withGun((t) => {
       const ph = (t / 0.9) * TAU
       const s = Math.sin(ph), c = Math.cos(ph)
       const thighL = -0.5 * s, thighR = 0.5 * s
       const kneeL = 0.1 + 0.8 * Math.pow(Math.max(0, c), 1.4)
       const kneeR = 0.1 + 0.8 * Math.pow(Math.max(0, -c), 1.4)
-      const base = stance(0)
       return {
-        ...base,
+        ...stance(0), ...PORT,
+        propGrip: [PORT.propGrip[0], PORT.propGrip[1] + 0.012 * Math.cos(ph * 2), PORT.propGrip[2]],
         hips: [0, 0.12 * s, 0.05 * s],
         spine: [0.1, -0.05 * s, -0.03 * s],
         chest: [-0.02, -0.1 * s, 0],
@@ -107,51 +134,37 @@ export const CLIPS = [
         head: [-0.05 + 0.02 * Math.cos(ph * 2), 0.04 * s, 0],
         thigh_L: [thighL, 0, 0.03], shin_L: [kneeL, 0, 0], foot_L: [-(thighL + kneeL) * 0.75, 0, -0.03],
         thigh_R: [thighR, 0, -0.03], shin_R: [kneeR, 0, 0], foot_R: [-(thighR + kneeR) * 0.75, 0, 0.03],
-        // Hands stay on the musket; only a small march bob.
-        upperarm_L: [-0.85 + 0.06 * s, 0, 0.25], forearm_L: [-0.75, 0.3, 0],
-        upperarm_R: [-0.55 - 0.06 * s, 0, -0.15], forearm_R: [-0.55, 0, 0], hand_R: [0.3, 0, 0],
         tabard_F: [Math.min(thighL, thighR) * 0.85 - 0.04, 0, 0],
         cape_1: [0.2 + 0.03 * Math.cos(ph * 2), 0, -0.04 * s], cape_2: [0.1 + 0.06 * Math.sin(ph * 2 - 1), 0, -0.05 * Math.sin(ph - 0.6)],
         cape_3: [0.1 + 0.08 * Math.sin(ph * 2 - 2), 0, -0.07 * Math.sin(ph - 1.2)],
-        pos: { hips: [0, -0.028 + 0.022 * Math.cos(ph * 2), 0] },
+        pos: { hips: [0, -0.03 + 0.022 * Math.cos(ph * 2), 0] },
       }
-    },
+    }),
   },
   {
-    // Raise the musket, aim down the barrel, fire (shot lands ~0.5s) with a
-    // recoil kick through head and shoulders, then lower.
+    // Shoulder, fire, recoil, recover. The game starts this clip at 0.12 s, the
+    // instant the shot leaves, so that frame is the trigger pull.
     name: 'Attack', duration: 0.9, loop: false,
-    pose: (() => {
-      const ready = stance(0)
-      const raise = layer(ready, {
-        hips: [0, 0.05, 0], spine: [0.08, 0.06, 0], chest: [0.04, 0.08, 0], head: [-0.06, -0.05, 0],
-        upperarm_R: [-1.05, 0, -0.1], forearm_R: [-0.35, 0, 0], hand_R: [0.75, 0, 0],
-        upperarm_L: [-1.2, 0, 0.2], forearm_L: [-0.5, 0.2, 0], hand_L: [0.3, 0, 0],
-        thigh_L: [-0.16, 0, 0], shin_L: [0.12, 0, 0], thigh_R: [0.12, 0, 0], shin_R: [0.14, 0, 0],
-        pos: { hips: [0, -0.01, 0.03] },
+    pose: withGun((() => {
+      const ready = { ...stance(0), ...PORT }
+      const aim = aimStance()
+      const kick = layer(aim, {
+        // gun driven straight back into the shoulder, muzzle climbing
+        propGrip: [-0.045, 0.018, -0.05], propDir: [0, 0.2, 0],
+        spine: [-0.1, -0.03, 0], chest: [-0.12, -0.04, 0], head: [-0.1, 0, 0],
+        pos: { hips: [0, 0, -0.035] },
       })
-      const fire = layer(raise, {
-        // Recoil: head and shoulders kick back, musket jumps.
-        spine: [-0.22, 0, 0], chest: [-0.14, 0, 0], head: [-0.28, 0, 0],
-        upperarm_R: [-0.2, 0, 0], forearm_R: [0.1, 0, 0], hand_R: [0.15, 0, 0],
-        upperarm_L: [0.12, 0, 0], forearm_L: [0.1, 0, 0],
-        thigh_L: [-0.1, 0, 0], thigh_R: [0.2, 0, 0],
-        pos: { hips: [0, -0.02, -0.05] },
-      })
-      const lower = layer(ready, {
-        upperarm_R: [-0.75, 0, -0.12], forearm_R: [-0.45, 0, 0], hand_R: [0.5, 0, 0],
-        upperarm_L: [-1.0, 0, 0.22], forearm_L: [-0.6, 0.25, 0],
-        head: [-0.1, 0, 0],
-      })
+      const settle = layer(aim, { propDir: [0, 0.04, 0], chest: [-0.02, 0, 0] })
       const fast = (t) => 1 - Math.pow(1 - t, 3)
       return keyed([
         { t: 0, pose: ready },
-        { t: 0.32, pose: raise },
-        { t: 0.5, pose: fire, ease: fast },
-        { t: 0.62, pose: lower },
+        { t: 0.115, pose: aim, ease: fast },
+        { t: 0.17, pose: kick, ease: fast },
+        { t: 0.36, pose: settle },
+        { t: 0.62, pose: aim },
         { t: 0.9, pose: ready },
       ])
-    })(),
+    })()),
   },
   {
     // Knocked back, buckles, topples onto its back. Holds the last frame.

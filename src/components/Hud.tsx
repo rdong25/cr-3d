@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { CARDS } from '../cards'
+import CardFace from './CardFace'
 import type { CameraMode, CardId } from '../types'
 import type { Snapshot } from './Arena'
 
@@ -95,33 +96,25 @@ export default function Hud({ snap, camera, mode, banner, emotes, onCamera, onSe
             <div id="joyKnob" />
           </div>
         )}
-        <div id="elixirWrap">
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, marginBottom: 4 }}>
-            <span>💧 Elixir {Math.floor(snap.elixir)}/10</span><span>Next: {snap.nextCard ? CARDS[snap.nextCard].name : '—'}</span>
-          </div>
-          <div id="elixirBar"><div id="elixirFill" className={snap.elixir >= 10 ? 'full' : ''} style={{ width: `${elixirPct}%` }} /></div>
-        </div>
         {mode === 'battle' ? (
-          <>
+          <div id="handDock">
+            <div id="elixirWrap">
+              <span id="elixirCount" className={snap.elixir >= 10 ? 'full' : ''}>{Math.floor(snap.elixir)}</span>
+              <div id="elixirBar"><div id="elixirFill" className={snap.elixir >= 10 ? 'full' : ''} style={{ width: `${elixirPct}%` }} /></div>
+              {snap.nextCard && (
+                <div id="nextCard">
+                  <small>Next</small>
+                  <CardFace id={snap.nextCard} size="mini" />
+                </div>
+              )}
+            </div>
             <div id="hand">
-              {snap.hand.map((id) => {
-                const c = CARDS[id]
-                const disabled = snap.elixir < c.cost
-                return (
-                  <button key={id} className={`handcard ${snap.selected === id ? 'sel' : ''} ${disabled ? 'disabled' : ''}`} onClick={() => onSelect(id)}>
-                    <span className="cost">💧{c.cost}</span>
-                    <span className="em">{c.emoji}</span>
-                    <b>{c.name}</b>
-                  </button>
-                )
-              })}
+              {snap.hand.map((id) => (
+                <CardFace key={id} id={id} selected={snap.selected === id} disabled={snap.elixir < CARDS[id].cost} onClick={() => onSelect(id)} />
+              ))}
             </div>
-            <div className="row" id="deployBar">
-              <button className="btn small blue" onClick={() => onDeployLane(-1)}>⬅️ Deploy left</button>
-              <button className="btn small blue" onClick={() => onDeployLane(1)}>Deploy right ➡️</button>
-            </div>
-            <div id="deployHint">Or tap your glowing side to place · pinch to zoom</div>
-          </>
+            <div id="deployHint">Tap a card, then tap your side of the arena · pinch to zoom</div>
+          </div>
         ) : (
           <div className="row" style={{ padding: 12 }}><span className="pill">👁️ Spectating — both sides are AI. Switch cameras to watch up close.</span></div>
         )}
