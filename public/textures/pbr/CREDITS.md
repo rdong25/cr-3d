@@ -12,3 +12,6 @@ licensed **CC0** (public domain). Resized and re-compressed for the web.
 | `roof_*` | roof_slates_02 |
 | `rock_*` | rock_wall_10 |
 | `../sky.hdr` | evening_road_01_puresky (1k HDRI) |
+| `armor_*` | metal_plate_02 (color map reduced to brightness "wear") |
+| `leather_*` | brown_leather (color map reduced to brightness "wear") |
+| `linen_*` | rough_linen (color map reduced to brightness "wear") |

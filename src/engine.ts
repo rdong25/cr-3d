@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { LOW_POWER } from './quality'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
@@ -10,6 +11,8 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { buildKing, buildPrincess, buildTroop, animateRig, type Rig } from './characters'
 import type { CameraMode, CardId, Side, TowerState, TroopState } from './types'
 import { HeroInstance, heroReady, isHeroCard, makeArenaEnvironment, setHeroEnvironment } from './hero'
+import { Vfx, type Trail } from './vfx'
+import { CARDS } from './cards'
 import { TOWER_FLOOR, arenaReady, buildField, makeBridge, makeTower, preloadArena, type Field } from './arena'
 
 // Golden-hour stadium: gradient sky dome, warm key light + soft shadows,
@@ -36,6 +39,7 @@ interface Projectile {
   t: number
   dur: number
   arc: number
+  trail: Trail
 }
 
 interface HpBar {
@@ -51,7 +55,7 @@ export class Engine {
   rigs = new Map<number, Rig>()
   /** Troops rendered with a skinned .glb character instead of a procedural rig. */
   heroes = new Map<number, { hero: HeroInstance; side: Side; x: number; z: number; cd: number; yaw: number; flying: boolean }>()
-  private dying: { hero: HeroInstance; t: number; dur: number }[] = []
+  private dying: { hero: HeroInstance; t: number; dur: number; side: Side }[] = []
   private deployHint = {
     troop: new THREE.Mesh(new THREE.PlaneGeometry(22, 13), new THREE.MeshBasicMaterial({ color: 0x4a90ff, transparent: true, opacity: 0.12, depthWrite: false })),
     spell: new THREE.Mesh(new THREE.PlaneGeometry(24, 28), new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.08, depthWrite: false })),
@@ -67,8 +71,13 @@ export class Engine {
   fpPitch = 0
   keys = new Set<string>()
   shake = 0
-  riverMat: THREE.MeshStandardMaterial
+  riverMat: THREE.Material
   private env: THREE.Texture
+  vfx!: Vfx
+  /** Last seen HP per troop / tower id, to turn HP drops into hit effects. */
+  private lastHp = new Map<number | string, number>()
+  private hitAcc = new Map<number | string, { dmg: number; cool: number }>()
+  private pending: { t: number; fn: () => void }[] = []
   private field: Field | null = null
   crowd: THREE.InstancedMesh
   crowdData: { x: number; z: number; y: number; phase: number; c: THREE.Color }[] = []
@@ -88,9 +97,11 @@ export class Engine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
-    // AgX: filmic, keeps highlights and avoids ACES's oversaturated "toy" look.
-    this.renderer.toneMapping = THREE.AgXToneMapping
-    this.renderer.toneMappingExposure = 1.05
+    // Khronos Neutral: keeps hue and saturation up to high brightness, so fire
+    // stays orange (AgX washed bright effects out to white) while the scene
+    // itself is graded in the post pass.
+    this.renderer.toneMapping = THREE.NeutralToneMapping
+    this.renderer.toneMappingExposure = 0.95
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     container.appendChild(this.renderer.domElement)
     this.env = makeArenaEnvironment(this.renderer)
@@ -108,6 +119,9 @@ export class Engine {
     }
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200)
     this.camera.position.set(0, 14, 16)
+    this.vfx = new Vfx(this.scene, this.camera, container, LOW_POWER)
+    // Dev only: lets tests and the console trigger effects (window.__engine.vfx.explosion(0, 0.4, 4)).
+    if (import.meta.env.DEV) (window as unknown as { __engine: Engine }).__engine = this
 
     // Sky: a gradient dome until the HDR sky (loadSky) arrives.
     this.scene.background = new THREE.Color(0x4a3f48)
@@ -164,7 +178,12 @@ export class Engine {
     const pos = new Float32Array(N * 3)
     for (let i = 0; i < N; i++) { pos[i * 3] = (Math.random() - 0.5) * 36; pos[i * 3 + 1] = 0.5 + Math.random() * 8; pos[i * 3 + 2] = (Math.random() - 0.5) * 30 }
     dustGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-    const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: 0xffe9b0, size: 0.09, transparent: true, opacity: 0.7 }))
+    // Soft round motes (a bare PointsMaterial draws squares).
+    const moteCanvas = document.createElement('canvas'); moteCanvas.width = moteCanvas.height = 32
+    const mg = moteCanvas.getContext('2d')!, grad = mg.createRadialGradient(16, 16, 0, 16, 16, 16)
+    grad.addColorStop(0, 'rgba(255,255,255,1)'); grad.addColorStop(1, 'rgba(255,255,255,0)')
+    mg.fillStyle = grad; mg.fillRect(0, 0, 32, 32)
+    const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: 0xffd9a0, size: 0.14, map: new THREE.CanvasTexture(moteCanvas), transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending }))
     dust.userData.dust = true; this.scene.add(dust)
 
     this.bindInput()
@@ -322,8 +341,8 @@ export class Engine {
       tip.rotation.x = Math.PI / 2; tip.position.z = 0.42
       group.add(shaft, tip)
     } else if (shot.kind === 'bullet') {
-      const tracer = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffe066 }))
-      tracer.scale.set(0.6, 0.6, 3.2)
+      const tracer = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 2.2, 0.8), toneMapped: false }))
+      tracer.scale.set(0.5, 0.5, 4)
       group.add(tracer)
     } else if (shot.kind === 'bomb') {
       const bomb = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5 }))
@@ -331,7 +350,7 @@ export class Engine {
       fuse.position.set(0, 0.22, 0)
       group.add(bomb, fuse)
     } else if (shot.kind === 'fire') {
-      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 10), new THREE.MeshBasicMaterial({ color: 0xff7a2a }))
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 1.3, 0.25), toneMapped: false }))
       const halo = new THREE.Mesh(new THREE.SphereGeometry(0.4, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffb03d, transparent: true, opacity: 0.35 }))
       group.add(ball, halo)
     } else {
@@ -341,7 +360,8 @@ export class Engine {
     group.position.copy(from)
     group.lookAt(to)
     this.scene.add(group)
-    this.projectiles.push({ group, from, to, kind: shot.kind, t: 0, dur: Math.max(0.15, dist / speed), arc })
+    this.vfx.muzzle(from, to, shot.kind)
+    this.projectiles.push({ group, from, to, kind: shot.kind, t: 0, dur: Math.max(0.15, dist / speed), arc, trail: this.vfx.projectileTrail(shot.kind) })
   }
 
   private updateProjectiles(dt: number) {
@@ -349,7 +369,8 @@ export class Engine {
       const p = this.projectiles[i]
       p.t += dt / p.dur
       if (p.t >= 1) {
-        if (p.kind === 'bomb' || p.kind === 'fire') this.shockwave(p.to.x, p.to.z, p.kind === 'fire' ? 0xff5722 : 0xffa53d)
+        p.trail.release()
+        this.vfx.impact(p.kind, p.to)
         this.scene.remove(p.group)
         this.projectiles.splice(i, 1)
         continue
@@ -357,12 +378,16 @@ export class Engine {
       const pos = new THREE.Vector3().lerpVectors(p.from, p.to, p.t)
       if (p.arc > 0) pos.y += Math.sin(p.t * Math.PI) * p.arc
       p.group.position.copy(pos)
+      p.trail.update(pos, this.camera)
+      this.vfx.projectileTick(p.kind, pos, dt)
       if (p.kind === 'arrow' || p.kind === 'bullet' || p.kind === 'cannon') p.group.lookAt(p.to)
     }
   }
 
   addTroop(t: TroopState) {
     this.makeHpBar(t.id, t.side, 0.9, 0.12)
+    this.lastHp.set(t.id, t.hp)
+    this.vfx.deploy(t.x, t.z, t.side, t.cardId === 'giant' ? 1.5 : CARDS[t.cardId].count > 1 ? 0.7 : 1)
     if (isHeroCard(t.cardId) && heroReady(t.cardId)) {
       const hero = new HeroInstance(t.side, t.cardId)
       const yaw = t.side === 'blue' ? Math.PI : 0
@@ -381,14 +406,16 @@ export class Engine {
 
   removeTroop(id: number) {
     this.removeHpBar(id)
+    this.lastHp.delete(id); this.hitAcc.delete(id)
     const h = this.heroes.get(id)
     if (h) {
-      // Keep the body around for the death clip, then sink it into the turf.
-      this.dying.push({ hero: h.hero, t: 0, dur: h.hero.die() })
+      // Keep the body for the death clip, then burn it away into embers.
+      this.vfx.death(h.x, h.flying ? 1.1 : 0, h.z, h.side)
+      this.dying.push({ hero: h.hero, t: 0, dur: h.hero.die(), side: h.side })
       this.heroes.delete(id)
     }
     const r = this.rigs.get(id)
-    if (r) { this.scene.remove(r.group); this.rigs.delete(id) }
+    if (r) { this.vfx.death(r.group.position.x, r.group.position.y, r.group.position.z, r.group.rotation.y === 0 ? 'red' : 'blue'); this.scene.remove(r.group); this.rigs.delete(id) }
     if (this.rideId === id) this.rideId = null
   }
 
@@ -397,12 +424,43 @@ export class Engine {
     if (!g) return
     g.rotation.z = 0.5; g.position.y = -0.7; g.scale.y = 0.55
     this.shake = 1; this.flash = 1
+    const t = this.towerStates.find((x) => x.id === id)
+    if (t) this.vfx.towerDestroyed(t.x, t.z, t.kind === 'king')
   }
 
-  shockwave(x: number, z: number, color = 0xffa53d) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.09, 8, 24), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95 }))
-    ring.rotation.x = -Math.PI / 2; ring.position.set(x, 0.15, z); ring.userData.shock = 0
-    this.scene.add(ring)
+  /** Kept for callers that just want a ground ring. */
+  shockwave(x: number, z: number, _color = 0xffa53d) {
+    this.vfx.wave(new THREE.Vector3(x, 0.5, z), 3, 0.02)
+  }
+
+  /** Fireball spell: a meteor streaks in and detonates at (x, z). */
+  fireball(x: number, z: number) { this.vfx.meteor(x, z) }
+
+  /** Run `fn` after `delay` seconds of game time. */
+  private later(delay: number, fn: () => void) { this.pending.push({ t: delay, fn }) }
+
+  /** A melee troop swings: time the effect to the strike frame of its Attack clip. */
+  private meleeFx(tr: TroopState, yaw: number) {
+    const def = CARDS[tr.cardId]
+    if (def.range > 1.5) return
+    const x = tr.x, z = tr.z, side = tr.side
+    if (tr.cardId === 'giant') this.later(0.3, () => this.vfx.slam(x + Math.sin(yaw) * 1.3, z + Math.cos(yaw) * 1.3, 1.2))
+    else if (tr.cardId === 'prince') this.later(0.22, () => { this.vfx.slash(x, z, yaw, side, 1.35); this.vfx.slam(x + Math.sin(yaw) * 1.2, z + Math.cos(yaw) * 1.2, 0.6) })
+    else this.later(0.22, () => this.vfx.slash(x, z, yaw, side, tr.cardId === 'knight' ? 1.1 : 0.75))
+  }
+
+  /** Turn an HP drop into a hit effect; rapid small drops are merged into one number. */
+  private hpDrop(id: number | string, hp: number, x: number, y: number, z: number, side: Side, stone: boolean, dt: number) {
+    const last = this.lastHp.get(id)
+    this.lastHp.set(id, hp)
+    let acc = this.hitAcc.get(id)
+    if (!acc) { acc = { dmg: 0, cool: 0 }; this.hitAcc.set(id, acc) }
+    acc.cool -= dt
+    if (last !== undefined && hp < last) acc.dmg += last - hp
+    if (acc.dmg >= 1 && acc.cool <= 0) {
+      this.vfx.hit(new THREE.Vector3(x, y, z), acc.dmg, { stone, side })
+      acc.dmg = 0; acc.cool = 0.16
+    }
   }
 
   setCameraMode(m: CameraMode) { this.mode = m; if (m === 'first') { this.fpPos.set(0, 1.7, 11); this.fpYaw = 0; this.fpPitch = 0 } }
@@ -489,6 +547,30 @@ export class Engine {
   }
 
   private composer: EffectComposer | null = null
+  private wavePass: ShaderPass | null = null
+
+  /** Feed the active shockwaves (world space) to the distortion pass (screen space). */
+  private updateWaves() {
+    const pass = this.wavePass
+    if (!pass) return
+    const waves = this.vfx.waves
+    pass.enabled = waves.length > 0
+    if (!pass.enabled) return
+    const u = pass.uniforms.uWaves.value as THREE.Vector4[]
+    const aspect = this.camera.aspect
+    pass.uniforms.uAspect.value = aspect
+    this.camera.updateMatrixWorld()
+    const c = new THREE.Vector3(), e = new THREE.Vector3(), right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0)
+    for (let i = 0; i < 4; i++) {
+      const w = waves[i]
+      if (!w) { u[i].set(0, 0, 0, 0); continue }
+      const t = w.t / w.dur, r = w.radius * (1 - (1 - t) ** 2)
+      c.copy(w.pos).project(this.camera)
+      e.copy(w.pos).addScaledVector(right, r).project(this.camera)
+      const radius = Math.hypot((e.x - c.x) * 0.5 * aspect, (e.y - c.y) * 0.5)
+      u[i].set(c.x * 0.5 + 0.5, c.y * 0.5 + 0.5, radius, c.z < 1 ? w.strength * (1 - t) ** 1.5 : 0)
+    }
+  }
 
   /** Sunset HDR sky: lights every PBR material (reflections + fill) and is the backdrop. */
   private loadSky() {
@@ -512,7 +594,7 @@ export class Engine {
    */
   private setupPost() {
     const w = this.container.clientWidth || window.innerWidth, h = this.container.clientHeight || window.innerHeight
-    const phone = window.matchMedia?.('(pointer: coarse)').matches ?? false
+    const phone = LOW_POWER
     const target = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: phone ? 0 : 4 })
     const composer = new EffectComposer(this.renderer, target)
     composer.setPixelRatio(this.renderer.getPixelRatio())
@@ -523,7 +605,26 @@ export class Engine {
       ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.4, thickness: 1.2, scale: 1 })
       composer.addPass(ao)
     }
-    composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.35, 0.5, 0.92))
+    // Shockwaves: rings of screen-space refraction from explosions (see Vfx.wave).
+    this.wavePass = new ShaderPass({
+      uniforms: { tDiffuse: { value: null }, uWaves: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uAspect: { value: 1 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform sampler2D tDiffuse; uniform vec4 uWaves[4]; uniform float uAspect; varying vec2 vUv;
+        void main() {
+          vec2 uv = vUv;
+          for (int i = 0; i < 4; i++) {
+            vec4 w = uWaves[i];
+            if (w.w <= 0.0) continue;
+            vec2 d = (vUv - w.xy) * vec2(uAspect, 1.0);
+            float x = (length(d) - w.z) / max(0.002, w.z * 0.3);
+            uv -= normalize(d + 1e-5) / vec2(uAspect, 1.0) * exp(-x * x * 3.0) * w.w;
+          }
+          gl_FragColor = texture2D(tDiffuse, uv);
+        }`,
+    })
+    this.wavePass.enabled = false
+    composer.addPass(this.wavePass)
+    composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.4, 0.55, 0.9))
     composer.addPass(new ShaderPass({
       uniforms: { tDiffuse: { value: null }, uSat: { value: 0.92 }, uContrast: { value: 1.22 }, uGain: { value: new THREE.Vector3(1.04, 1.0, 0.94) }, uLift: { value: new THREE.Vector3(0.008, 0.006, 0.012) }, uVig: { value: 0.45 } },
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
@@ -560,7 +661,11 @@ export class Engine {
     this.camera.updateProjectionMatrix()
   }
 
+  /** Slow motion for visuals only (1 = real time). Handy for inspecting effects. */
+  timeScale = 1
+
   render(dt: number, troops: TroopState[], towers: TowerState[]) {
+    dt *= this.timeScale
     this.time += dt
     const t = this.time
     // River flow
@@ -585,8 +690,8 @@ export class Engine {
     this.crowd.instanceMatrix.needsUpdate = true
 
     // Deploy hint pulses gently.
-    ;(this.deployHint.troop.material as THREE.MeshBasicMaterial).opacity = 0.2 + Math.sin(t * 4) * 0.06
-    ;(this.deployHint.spell.material as THREE.MeshBasicMaterial).opacity = 0.12 + Math.sin(t * 4) * 0.04
+    ;(this.deployHint.troop.material as THREE.MeshBasicMaterial).opacity = 0.05 + Math.sin(t * 4) * 0.02
+    ;(this.deployHint.spell.material as THREE.MeshBasicMaterial).opacity = 0.04 + Math.sin(t * 4) * 0.015
 
     // Troop meshes
     for (const tr of troops) {
@@ -617,7 +722,9 @@ export class Engine {
       h.hero.group.rotation.y = h.yaw
       h.hero.setSpeed(speed)
       // game.ts resets attackCd to 1 on the frame a hit lands.
-      if (tr.attackCd > h.cd + 0.5) h.hero.attack()
+      if (tr.attackCd > h.cd + 0.5) { h.hero.attack(); this.meleeFx(tr, h.yaw) }
+      if (tr.cardId === 'prince' && speed > 1 && Math.random() < dt * 14) this.vfx.footDust(tr.x, tr.z)
+      this.hpDrop(tr.id, tr.hp, tr.x, h.flying ? 2.0 : 1.0, tr.z, tr.side, false, dt)
       h.cd = tr.attackCd
       h.hero.update(dt, t)
       this.updateHpBar(tr.id, tr.hp / tr.maxHp, tr.x, this.troopBarHeight(tr), tr.z)
@@ -626,13 +733,25 @@ export class Engine {
       const d = this.dying[i]
       d.t += dt
       d.hero.update(dt, t)
-      const sinkStart = d.dur + 1.2
-      if (d.t > sinkStart) d.hero.group.position.y = -(d.t - sinkStart) * 0.6
-      if (d.t > sinkStart + 1.5) { d.hero.dispose(); this.dying.splice(i, 1) }
+      // After the death clip settles, the body burns away from a glowing edge.
+      const burnStart = d.dur * 0.75, burn = (d.t - burnStart) / 1.1
+      if (burn > 0) {
+        d.hero.setDissolve(Math.min(1, burn), d.side === 'blue' ? new THREE.Color(0.6, 1.6, 5) : new THREE.Color(5, 1.2, 0.3))
+        const p = d.hero.group.position
+        if (Math.random() < dt * 40) this.vfx.ember(p.x, p.y, p.z, d.side)
+      }
+      if (burn >= 1) { d.hero.dispose(); this.dying.splice(i, 1) }
     }
     // Tower HP bars (above the tower top; hidden once the tower falls).
     for (const tw of towers) {
       this.updateHpBar(tw.id, tw.hp / tw.maxHp, tw.x, tw.kind === 'king' ? 4.3 : 3.5, tw.z)
+      if (!tw.alive) continue
+      this.hpDrop(tw.id, tw.hp, tw.x, tw.kind === 'king' ? 2.6 : 2.0, tw.z, tw.side, true, dt)
+      this.vfx.towerDamage(tw.x, tw.kind === 'king' ? 3.6 : 2.8, tw.z, tw.hp / tw.maxHp, dt)
+    }
+    for (let i = this.pending.length - 1; i >= 0; i--) {
+      this.pending[i].t -= dt
+      if (this.pending[i].t <= 0) { const { fn } = this.pending[i]; this.pending.splice(i, 1); fn() }
     }
     // Projectiles in flight.
     this.updateProjectiles(dt)
@@ -672,12 +791,15 @@ export class Engine {
         this.camera.position.set(0, 10, 14); this.camera.lookAt(0, 0, 0)
       }
     }
-    if (this.shake > 0) {
-      this.shake = Math.max(0, this.shake - dt * 1.6)
-      this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5
-      this.camera.position.y += (Math.random() - 0.5) * this.shake * 0.4
+    this.shake = Math.max(0, this.shake - dt * 1.6)
+    const shake = Math.max(this.shake, this.vfx.shake)
+    if (shake > 0) {
+      this.camera.position.x += (Math.random() - 0.5) * shake * 0.5
+      this.camera.position.y += (Math.random() - 0.5) * shake * 0.4
     }
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 1.2)
+    this.vfx.update(dt, this.renderer.domElement.height)
+    this.updateWaves()
     if (this.composer) this.composer.render(dt)
     else this.renderer.render(this.scene, this.camera)
   }

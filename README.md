@@ -88,6 +88,22 @@ Requires Node 18+.
 - **Synthesized sound** (WebAudio, no audio files): deploy, hits, fireball,
   explosions, tower falls, win/lose jingles. Toggle in the corner.
 
+## Effects and rendering
+
+- **Effects engine** (`src/vfx.ts`): GPU particles in one draw call (sprites
+  from Kenney's CC0 Particle Pack), slash arcs, summoning circles, projectile
+  ribbons, bouncing debris, flash lights, scorch marks, screen-space shockwave
+  distortion and floating damage numbers. Every attack, deploy, death and
+  tower hit triggers one; troops burn away with a dissolve shader.
+- **Materials** (`src/pbr.ts`): Poly Haven CC0 scans projected triplanar onto
+  the sculpted arena and, as detail (wear, roughness, normals), onto the
+  skinned troops. Credits: `public/textures/pbr/CREDITS.md`,
+  `public/textures/vfx/CREDITS.md`.
+- **Lighting and post**: HDR sunset sky, ambient occlusion and MSAA (desktop),
+  bloom, color grade, real-time river reflections (desktop).
+- **Quality**: phones get a lighter path automatically. Force it with
+  `?q=low`, or force everything on with `?q=high`.
+
 ## Controls
 
 | Action | Control |

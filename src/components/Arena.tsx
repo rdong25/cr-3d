@@ -87,10 +87,10 @@ const Arena = forwardRef<ArenaHandle, Props>(function Arena({ profile, mode, act
 
     const events: GameEvents = {
       onUpdate: () => { if (game) cbRef.current.onSnapshot(snapshotOf(game)) },
-      onTowerFall: (t: TowerState) => { engine?.setTowerFallen(t.id); engine?.shockwave(t.x, t.z) },
+      onTowerFall: (t: TowerState) => { engine?.setTowerFallen(t.id) },
       onTroopAdd: (t: TroopState) => { engine?.addTroop(t) },
       onTroopRemove: (id: number) => { engine?.removeTroop(id) },
-      onFireball: (x: number, z: number) => { engine?.shockwave(x, z, 0xff5722); sfx.explosion() },
+      onFireball: (x: number, z: number) => { engine?.fireball(x, z); sfx.explosion() },
       onShot: (shot) => { engine?.spawnShot(shot) },
       onEnd: (rec: MatchRecord) => { cbRef.current.onEnd(rec) },
       onBanner: (text: string, sub?: string) => { cbRef.current.onBanner(text, sub) }

@@ -1,9 +1,11 @@
 import * as THREE from 'three'
+import { LOW_POWER } from './quality'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { Side } from './types'
 import { TEAM_COLORS } from './hero'
 import { pbrSet, splatGround, triplanarPBR } from './pbr'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { Water } from 'three/examples/jsm/objects/Water.js'
 
 /** Deeper, less toy-like team colors for cloth and roofs in the arena. */
 const ARENA_TEAM: Record<Side, number> = { blue: 0x24407e, red: 0x7e1c1c }
@@ -145,7 +147,7 @@ const waterNormals = () => once('waterN', () => canvasTex(256, 256, (g, r) => {
   void r
 }, 3, false))
 
-export interface Field { water: THREE.MeshStandardMaterial; update(t: number): void }
+export interface Field { water: THREE.Material; update(t: number): void }
 
 /** Alpha-tested grass blades, painted once. */
 const bladeTex = () => once('blades', () => canvasTex(128, 128, (g, r) => {
@@ -243,10 +245,32 @@ export function buildField(scene: THREE.Scene, env: THREE.Texture | null, towers
   // River bed + water surface.
   const bed = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.3, 2.6), new THREE.MeshStandardMaterial({ color: 0x0f2a33, roughness: 1 }))
   bed.position.set(0, -0.32, 0); scene.add(bed)
-  const n = waterNormals(); n.repeat.set(10, 1)
-  const water = new THREE.MeshStandardMaterial({ color: 0x1e5566, roughness: 0.12, metalness: 0.05, normalMap: n, normalScale: new THREE.Vector2(0.6, 0.6), envMap: env, envMapIntensity: 1.1, transparent: true, opacity: 0.9 })
-  const surf = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_W, 2.6), water)
-  surf.rotation.x = -Math.PI / 2; surf.position.y = -0.06; surf.receiveShadow = true; scene.add(surf)
+  const n = waterNormals()
+  let water: THREE.Material
+  let tickWater: (t: number) => void
+  if (LOW_POWER) {
+    // Phones: a glossy normal-mapped surface lit by the sky.
+    n.repeat.set(10, 1)
+    const m = new THREE.MeshStandardMaterial({ color: 0x1e5566, roughness: 0.12, metalness: 0.05, normalMap: n, normalScale: new THREE.Vector2(0.6, 0.6), envMap: env, envMapIntensity: 1.1, transparent: true, opacity: 0.9 })
+    const surf = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_W, 2.6), m)
+    surf.rotation.x = -Math.PI / 2; surf.position.y = -0.06; surf.receiveShadow = true; scene.add(surf)
+    water = m
+    tickWater = (t) => n.offset.set(t * 0.035, Math.sin(t * 0.4) * 0.02)
+  } else {
+    // Desktop: a planar reflection of the live scene (towers, bridges, troops,
+    // explosions), rippled by the normal map, with a sun glint.
+    const w = new Water(new THREE.PlaneGeometry(FIELD_W, 2.6), {
+      textureWidth: 512, textureHeight: 512, waterNormals: n,
+      sunDirection: new THREE.Vector3(-20, 18, 8).normalize(), sunColor: 0xffcfa0, waterColor: 0x0d2f38, distortionScale: 0.9, fog: true,
+    })
+    w.rotation.x = -Math.PI / 2; w.position.y = -0.06
+    w.material.uniforms.size.value = 2.2
+    // The stock shader mirrors the bright sky almost fully; keep the river dark and moody.
+    w.material.fragmentShader = w.material.fragmentShader.replace('reflectionSample * 0.9', 'reflectionSample * 0.5')
+    scene.add(w)
+    water = w.material
+    tickWater = (t) => { w.material.uniforms.time.value = t * 0.45 }
+  }
   // Stone banks along both edges of the river.
   for (const s of [-1, 1]) {
     const bank = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.34, 0.32), stone)
@@ -272,9 +296,9 @@ export function buildField(scene: THREE.Scene, env: THREE.Texture | null, towers
     const c = new THREE.Mesh(new THREE.BoxGeometry(w, 0.45, d), stone)
     c.position.set(x, 0.18, z); c.castShadow = true; c.receiveShadow = true; scene.add(c)
   }
-  const wind = scatterClutter(scene, towers, window.matchMedia?.('(pointer: coarse)').matches ?? false)
+  const wind = scatterClutter(scene, towers, LOW_POWER)
   return {
     water,
-    update(t: number) { n.offset.set(t * 0.035, Math.sin(t * 0.4) * 0.02); wind(t) },
+    update(t: number) { tickWater(t); wind(t) },
   }
 }

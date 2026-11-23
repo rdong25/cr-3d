@@ -2,6 +2,10 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js'
 import type { CardId, Side } from './types'
+import { cloneWithDissolve, heroSurface, pbrSet } from './pbr'
+
+/** Shared "not dissolving" uniform for every living hero. */
+const NO_DISSOLVE = { value: 0 }
 
 // Runtime for skinned, animated .glb characters — the part of the pipeline
 // that stays the same whether the model came from tools/hero (generated) or
@@ -69,6 +73,11 @@ function materialsFor(side: Side, cardId: HeroCardId): Map<string, THREE.MeshSta
     if (c.name === 'Warden_Team') c.color.setHex(TEAM_COLORS[side])
     c.envMap = envMap
     c.envMapIntensity = c.name === 'Warden_Metal' ? 1.1 : 0.6
+    // Scanned detail over the baked colors: worn steel, leather grain, linen weave.
+    if (c.name === 'Warden_Metal') heroSurface(c, pbrSet('armor'), 0.9, NO_DISSOLVE, { wear: 0.85, normalStrength: 1.2 })
+    else if (c.name === 'Warden_Soft') heroSurface(c, pbrSet('leather'), 0.45, NO_DISSOLVE, { wear: 0.6, normalStrength: 0.9 })
+    else if (c.name === 'Warden_Team') heroSurface(c, pbrSet('linen'), 0.35, NO_DISSOLVE, { wear: 0.5, normalStrength: 1.1 })
+    else heroSurface(c, null, 1, NO_DISSOLVE)
     set!.set(c.name, c)
   })
   materialSets.set(key, set)
@@ -221,6 +230,27 @@ export class HeroInstance {
   update(dt: number, time: number) {
     this.mixer.update(dt)
     if (this.glowMat) this.glowMat.emissiveIntensity = 2.8 + Math.sin(time * 3.1) * 0.5 + Math.sin(time * 7.3) * 0.25
+  }
+
+  private dissolveU: { value: number } | null = null
+  private model: THREE.Object3D | null = null
+
+  /** 0 = solid, 1 = gone. The first call gives this instance its own materials. */
+  setDissolve(v: number, edge = new THREE.Color(4, 1.4, 0.3)) {
+    if (!this.dissolveU) {
+      this.dissolveU = { value: 0 }
+      const own = new Map<THREE.Material, THREE.Material>()
+      this.group.traverse((o) => {
+        const mesh = o as THREE.Mesh
+        if (!mesh.isMesh || !(mesh.material as THREE.MeshStandardMaterial).isMeshStandardMaterial) return
+        const m = mesh.material as THREE.MeshStandardMaterial
+        if (!own.has(m)) own.set(m, cloneWithDissolve(m, this.dissolveU!, edge))
+        mesh.material = own.get(m)!
+        mesh.castShadow = false
+      })
+      this.group.traverse((o) => { if ((o as THREE.Sprite).isSprite) o.visible = false })
+    }
+    this.dissolveU.value = v
   }
 
   dispose() {

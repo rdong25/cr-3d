@@ -9,7 +9,7 @@ import * as THREE from 'three'
 // it works for any rotation / uniform scale without needing tangents).
 
 const DIR = `${import.meta.env.BASE_URL}textures/pbr/`
-export type PBRName = 'stone' | 'grass' | 'dirt' | 'wood' | 'roof' | 'rock'
+export type PBRName = 'stone' | 'grass' | 'dirt' | 'wood' | 'roof' | 'rock' | 'armor' | 'leather' | 'linen'
 export interface PBRSet { color: THREE.Texture; normal: THREE.Texture; rough: THREE.Texture }
 
 const loader = new THREE.TextureLoader()
@@ -122,4 +122,72 @@ export function splatGround(mat: THREE.MeshStandardMaterial, mask: THREE.Texture
   }
   mat.customProgramCacheKey = () => 'splat-ground'
   mat.needsUpdate = true
+}
+
+/**
+ * Character surface: keeps the model's own baked colors, and layers a scanned
+ * material on top as *detail* (brightness wear, roughness, normal), projected
+ * triplanar in bind-pose space so it sticks to the skin while animating. The
+ * normal's basis follows the skeleton (skinMatrix), so lighting stays right
+ * on moving limbs.
+ *
+ * Also carries a dissolve: where a 3D noise falls below `dissolve.value` the
+ * surface is cut away, with a glowing rim. Pass a per-instance uniform to
+ * dissolve one character without affecting others sharing the program.
+ */
+export function heroSurface(mat: THREE.MeshStandardMaterial, set: PBRSet | null, tile: number, dissolve: { value: number }, opts: { wear?: number; normalStrength?: number; edge?: THREE.Color } = {}) {
+  mat.userData.heroSurface = { set, tile, opts }
+  const edge = opts.edge ?? new THREE.Color(4, 1.4, 0.3)
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, {
+      tpColor: { value: set?.color ?? null }, tpNormal: { value: set?.normal ?? null }, tpRough: { value: set?.rough ?? null },
+      tpScale: { value: 1 / tile }, tpNormalStrength: { value: opts.normalStrength ?? 1 }, tpTint: { value: new THREE.Color(0xffffff) },
+      tpWear: { value: opts.wear ?? 1 }, uDissolve: dissolve, uEdge: { value: edge },
+    })
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\n${VERT_DECL}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vTriPos = position; vTriN = normal;
+        #ifdef USE_SKINNING
+          vAxX = normalize(normalMatrix * (skinMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz);
+          vAxY = normalize(normalMatrix * (skinMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+          vAxZ = normalize(normalMatrix * (skinMatrix * vec4(0.0, 0.0, 1.0, 0.0)).xyz);
+        #else
+          vAxX = normalize(normalMatrix * vec3(1.0, 0.0, 0.0)); vAxY = normalize(normalMatrix * vec3(0.0, 1.0, 0.0)); vAxZ = normalize(normalMatrix * vec3(0.0, 0.0, 1.0));
+        #endif`)
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${FRAG_DECL}
+        uniform float tpWear; uniform float uDissolve; uniform vec3 uEdge;
+        float hHash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+        float hNoise(vec3 x) {
+          vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(mix(hHash(i), hHash(i + vec3(1,0,0)), f.x), mix(hHash(i + vec3(0,1,0)), hHash(i + vec3(1,1,0)), f.x), f.y),
+                     mix(mix(hHash(i + vec3(0,0,1)), hHash(i + vec3(1,0,1)), f.x), mix(hHash(i + vec3(0,1,1)), hHash(i + vec3(1,1,1)), f.x), f.y), f.z);
+        }`)
+      .replace('#include <map_fragment>', `
+        float dN = hNoise(vTriPos * 7.0) * 0.7 + hNoise(vTriPos * 19.0) * 0.3;
+        // burn away from the feet upward
+        float dCut = uDissolve * 1.25 - (1.0 - clamp(vTriPos.y / 1.9, 0.0, 1.0)) * 0.0;
+        if (uDissolve > 0.0 && dN < dCut) discard;
+        float dRim = uDissolve > 0.0 ? smoothstep(dCut + 0.1, dCut, dN) : 0.0;
+        vec3 tpN = normalize(vTriN);
+        vec3 tpW = tpWeights(tpN);
+        vec3 tpP = vTriPos * tpScale;
+        ${set ? 'diffuseColor.rgb *= mix(vec3(1.0), vec3(tpSample(tpColor, tpP, tpW).r * 1.22), tpWear);' : ''}`)
+      .replace('#include <roughnessmap_fragment>', set ? 'float roughnessFactor = clamp(roughness * mix(1.0, tpSample(tpRough, tpP, tpW).g * 1.7, tpWear), 0.05, 1.0);' : 'float roughnessFactor = roughness;')
+      .replace('#include <normal_fragment_maps>', set ? `
+        vec3 tpNo = tpNormalObj(tpP, tpN, tpW);
+        normal = normalize(tpNo.x * vAxX + tpNo.y * vAxY + tpNo.z * vAxZ);` : '')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += uEdge * dRim * 3.0;')
+  }
+  mat.customProgramCacheKey = () => `hero-${set ? set.color.uuid : 'none'}-${tile}`
+  mat.needsUpdate = true
+}
+
+/** A private copy of a hero material whose dissolve can be driven on its own. */
+export function cloneWithDissolve(mat: THREE.MeshStandardMaterial, dissolve: { value: number }, edge: THREE.Color): THREE.MeshStandardMaterial {
+  const c = mat.clone()
+  const h = mat.userData.heroSurface as { set: PBRSet | null; tile: number; opts: { wear?: number; normalStrength?: number } } | undefined
+  heroSurface(c, h?.set ?? null, h?.tile ?? 1, dissolve, { ...(h?.opts ?? {}), edge })
+  return c
 }
