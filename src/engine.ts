@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { buildKing, buildPrincess, buildTroop, animateRig, type Rig } from './characters'
 import type { CameraMode, CardId, Side, TowerState, TroopState } from './types'
+import { HeroInstance, heroReady, makeArenaEnvironment, setHeroEnvironment } from './hero'
 
 // Golden-hour stadium: gradient sky dome, warm key light + soft shadows,
 // cool rim fill, horizon haze, floodlit stands, torch lights, dust motes,
@@ -15,6 +16,9 @@ export class Engine {
   scene = new THREE.Scene()
   camera: THREE.PerspectiveCamera
   rigs = new Map<number, Rig>()
+  /** Troops rendered with a skinned .glb character instead of a procedural rig. */
+  heroes = new Map<number, { hero: HeroInstance; side: Side; x: number; z: number; cd: number; yaw: number }>()
+  private dying: { hero: HeroInstance; t: number; dur: number }[] = []
   towerMeshes = new Map<string, THREE.Group>()
   mode: CameraMode = 'broadcast'
   orbitAngle = 0.6
@@ -46,6 +50,7 @@ export class Engine {
     this.renderer.toneMappingExposure = 1.12
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     container.appendChild(this.renderer.domElement)
+    setHeroEnvironment(makeArenaEnvironment(this.renderer))
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200)
     this.camera.position.set(0, 14, 16)
 
@@ -208,6 +213,15 @@ export class Engine {
   }
 
   addTroop(t: TroopState) {
+    if (t.cardId === 'knight' && heroReady()) {
+      const hero = new HeroInstance(t.side)
+      const yaw = t.side === 'blue' ? Math.PI : 0
+      hero.group.position.set(t.x, 0, t.z)
+      hero.group.rotation.y = yaw
+      this.scene.add(hero.group)
+      this.heroes.set(t.id, { hero, side: t.side, x: t.x, z: t.z, cd: t.attackCd, yaw })
+      return
+    }
     const rig = buildTroop(t.cardId, t.side)
     rig.group.position.set(t.x, t.flying ? 1.1 : 0, t.z)
     rig.group.rotation.y = t.side === 'blue' ? Math.PI : 0
@@ -216,6 +230,12 @@ export class Engine {
   }
 
   removeTroop(id: number) {
+    const h = this.heroes.get(id)
+    if (h) {
+      // Keep the body around for the death clip, then sink it into the turf.
+      this.dying.push({ hero: h.hero, t: 0, dur: h.hero.die() })
+      this.heroes.delete(id)
+    }
     const r = this.rigs.get(id)
     if (r) { this.scene.remove(r.group); this.rigs.delete(id) }
     if (this.rideId === id) this.rideId = null
@@ -309,6 +329,34 @@ export class Engine {
       // Face movement direction
       rig.group.rotation.y = tr.side === 'blue' ? Math.PI : 0
     }
+    for (const tr of troops) {
+      const h = this.heroes.get(tr.id)
+      if (!h) continue
+      const dx = tr.x - h.x, dz = tr.z - h.z
+      const speed = dt > 0 ? Math.hypot(dx, dz) / dt : 0
+      h.x = tr.x; h.z = tr.z
+      // Turn smoothly toward the direction of travel.
+      if (speed > 0.15) {
+        const want = Math.atan2(dx, dz)
+        const diff = Math.atan2(Math.sin(want - h.yaw), Math.cos(want - h.yaw))
+        h.yaw += diff * Math.min(1, dt * 8)
+      }
+      h.hero.group.position.set(tr.x, 0, tr.z)
+      h.hero.group.rotation.y = h.yaw
+      h.hero.setSpeed(speed)
+      // game.ts resets attackCd to 1 on the frame a hit lands.
+      if (tr.attackCd > h.cd + 0.5) h.hero.attack()
+      h.cd = tr.attackCd
+      h.hero.update(dt, t)
+    }
+    for (let i = this.dying.length - 1; i >= 0; i--) {
+      const d = this.dying[i]
+      d.t += dt
+      d.hero.update(dt, t)
+      const sinkStart = d.dur + 1.2
+      if (d.t > sinkStart) d.hero.group.position.y = -(d.t - sinkStart) * 0.6
+      if (d.t > sinkStart + 1.5) { d.hero.dispose(); this.dying.splice(i, 1) }
+    }
     void towers
 
     // Camera
@@ -334,10 +382,14 @@ export class Engine {
       this.camera.rotation.set(this.fpPitch, this.fpYaw, 0, 'YXZ')
     } else if (this.mode === 'ride') {
       const rig = this.rideId != null ? this.rigs.get(this.rideId) : undefined
-      if (rig) {
-        const p = rig.group.position
-        this.camera.position.set(p.x, p.y + 2.1, p.z + (rig.group.rotation.y === 0 ? 2.2 : -2.2))
-        this.camera.lookAt(p.x, p.y + 1, p.z + (rig.group.rotation.y === 0 ? -6 : 6))
+      const hero = this.rideId != null ? this.heroes.get(this.rideId) : undefined
+      const obj = rig?.group ?? hero?.hero.group
+      if (obj) {
+        // Same framing as before; heroes turn while walking, so use their spawn facing.
+        const red = rig ? rig.group.rotation.y === 0 : hero!.side === 'red'
+        const p = obj.position
+        this.camera.position.set(p.x, p.y + 2.1, p.z + (red ? 2.2 : -2.2))
+        this.camera.lookAt(p.x, p.y + 1, p.z + (red ? -6 : 6))
       } else {
         this.camera.position.set(0, 10, 14); this.camera.lookAt(0, 0, 0)
       }

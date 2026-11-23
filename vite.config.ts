@@ -6,5 +6,8 @@ export default defineConfig({
   base: './',
   plugins: [react()],
   server: { port: 5173, host: true },
-  build: { target: 'es2020', outDir: 'dist', sourcemap: false }
+  build: {
+    target: 'es2020', outDir: 'dist', sourcemap: false,
+    rollupOptions: { input: { main: 'index.html', viewer: 'viewer.html' } },
+  },
 })
