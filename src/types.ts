@@ -13,6 +13,8 @@ export interface CardDef {
   range: number
   speed: number
   count: number
+  /** Seconds between attacks (Clash Royale hit speed, Level 11 tournament standard). */
+  hitSpeed: number
   flying?: boolean
   splash?: boolean
   desc: string
@@ -78,6 +80,8 @@ export interface TowerState {
   hp: number
   maxHp: number
   alive: boolean
-  /** Seconds until the princess tower's next (visual) cannon shot. */
+  /** Seconds until this tower's next shot. */
   shotCd?: number
+  /** King Towers start dormant and only shoot once activated (damaged, or a friendly Princess Tower falls). */
+  active?: boolean
 }

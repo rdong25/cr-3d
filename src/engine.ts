@@ -642,14 +642,16 @@ export class Engine {
 }
 
 export function towerPositions(): TowerState[] {
+  // Tower HP at Level 11 (Tournament Standard): King 4,824, Princess 3,052.
+  // King Towers start dormant (active: false); Princess Towers are always active.
   const mk = (id: string, side: Side, kind: 'king' | 'princess', lane: -1 | 0 | 1, x: number, z: number, hp: number): TowerState =>
-    ({ id, side, kind, lane, x, z, hp, maxHp: hp, alive: true })
+    ({ id, side, kind, lane, x, z, hp, maxHp: hp, alive: true, active: kind === 'princess' })
   return [
-    mk('blue-king', 'blue', 'king', 0, 0, 12.5, 2400),
-    mk('blue-p-left', 'blue', 'princess', -1, -4.2, 8.5, 1400),
-    mk('blue-p-right', 'blue', 'princess', 1, 4.2, 8.5, 1400),
-    mk('red-king', 'red', 'king', 0, 0, -12.5, 2400),
-    mk('red-p-left', 'red', 'princess', -1, -4.2, -8.5, 1400),
-    mk('red-p-right', 'red', 'princess', 1, 4.2, -8.5, 1400)
+    mk('blue-king', 'blue', 'king', 0, 0, 12.5, 4824),
+    mk('blue-p-left', 'blue', 'princess', -1, -4.2, 8.5, 3052),
+    mk('blue-p-right', 'blue', 'princess', 1, 4.2, 8.5, 3052),
+    mk('red-king', 'red', 'king', 0, 0, -12.5, 4824),
+    mk('red-p-left', 'red', 'princess', -1, -4.2, -8.5, 3052),
+    mk('red-p-right', 'red', 'princess', 1, 4.2, -8.5, 3052)
   ]
 }

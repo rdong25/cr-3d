@@ -32,6 +32,8 @@ export class Game {
   elixirMax = 10
   timeLeft = 180
   overtime = false
+  /** After Overtime expires with no tower down: every tower drains until the lowest-HP one falls. */
+  tiebreaker = false
   blueCrowns = 0
   redCrowns = 0
   hand: CardId[] = []
@@ -56,7 +58,7 @@ export class Game {
     this.troops = []
     this.towers = towerPositions()
     this.elixir = 5; this.blueElixir = 5
-    this.timeLeft = 180; this.overtime = false
+    this.timeLeft = 180; this.overtime = false; this.tiebreaker = false
     this.blueCrowns = 0; this.redCrowns = 0
     this.ai = new RivalAI(this.profile)
     this.spectateAI = mode === 'spectate' ? new RivalAI(this.profile) : null
@@ -77,11 +79,14 @@ export class Game {
     const def = CARDS[cardId]
     if (side === 'blue' && this.mode === 'battle') {
       if (this.elixir < def.cost) return false
-      if (cardId !== 'fireball' && z < 0.5) return false // troops: own half only; spells go anywhere
+      // Troops deploy on your own half — unless you took the enemy Princess
+      // Tower in this lane, which annexes the ground past the bridge there.
+      if (cardId !== 'fireball' && z < this.blueDeployMinZ(lane)) return false
       this.elixir -= def.cost
     }
     if (side === 'red') {
       if (this.ai.elixir < def.cost) return false
+      if (cardId !== 'fireball' && z > this.redDeployMaxZ(lane)) return false
       this.ai.elixir -= def.cost
     }
     if (cardId === 'fireball') {
@@ -123,25 +128,37 @@ export class Game {
     this.events.onUpdate()
   }
 
-  /** Deploy the selected card at a tapped arena point. Troops snap onto your half; spells land where tapped. */
+  /** Lowest z blue may deploy troops in a lane: its own half (0.5), or past the bridge (-7) once it has taken that lane's red Princess Tower (the annexed ground). */
+  private blueDeployMinZ(lane: -1 | 1): number {
+    const guard = this.towers.find((t) => t.side === 'red' && t.kind === 'princess' && t.lane === lane)
+    return guard && !guard.alive ? -7 : 0.5
+  }
+  /** Highest z red may deploy troops in a lane: its own half (-0.5), or past the bridge (7) once it has taken that lane's blue Princess Tower. */
+  private redDeployMaxZ(lane: -1 | 1): number {
+    const guard = this.towers.find((t) => t.side === 'blue' && t.kind === 'princess' && t.lane === lane)
+    return guard && !guard.alive ? 7 : -0.5
+  }
+
+  /** Deploy the selected card at a tapped arena point. Troops snap onto your half (or the annexed ground past the bridge); spells land where tapped. */
   deploySelected(x: number, z: number): boolean {
     if (!this.selected) return false
     const lane: -1 | 1 = x < 0 ? -1 : 1
     const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
     if (this.selected === 'fireball') return this.deploy('fireball', 'blue', clamp(x, -11, 11), clamp(z, -14, 14), lane)
-    return this.deploy(this.selected, 'blue', clamp(x, -10, 10), clamp(z, 1, 13), lane)
+    return this.deploy(this.selected, 'blue', clamp(x, -10, 10), clamp(z, this.blueDeployMinZ(lane), 13), lane)
   }
 
   private damageArea(x: number, z: number, dmg: number, side: Side) {
     for (const t of this.troops) {
       if (t.side === side) continue
       const d = Math.hypot(t.x - x, t.z - z)
-      if (d < 3) { t.hp -= dmg; if (t.hp <= 0) this.kill(t) }
+      if (d < 2.5) { t.hp -= dmg; if (t.hp <= 0) this.kill(t) }
     }
     for (const tw of this.towers) {
       if (tw.side === side || !tw.alive) continue
       const d = Math.hypot(tw.x - x, tw.z - z)
-      if (d < 3) this.damageTower(tw, dmg)
+      // Towers take 65% reduced damage from spells (Fireball hits a tower for 35% of 572 = 200).
+      if (d < 2.5) this.damageTower(tw, dmg * 0.35)
     }
     setTimeout(() => sfx.explosion(), 350)
   }
@@ -166,6 +183,9 @@ export class Game {
   }
 
   private damageTower(tw: TowerState, dmg: number) {
+    if (!tw.alive) return
+    // A King Tower activates the moment it takes damage.
+    if (tw.kind === 'king') tw.active = true
     tw.hp -= dmg
     if (tw.hp <= 0 && tw.alive) {
       tw.alive = false; tw.hp = 0
@@ -173,8 +193,13 @@ export class Game {
       else this.redCrowns++
       this.events.onTowerFall(tw)
       sfx.towerFall()
-      if (tw.kind === 'king') this.end()
-      else this.events.onBanner(tw.side === 'red' ? 'Tower destroyed!' : 'Your tower fell!', tw.side === 'red' ? '+1 crown' : 'Defend the King!')
+      if (tw.kind === 'king') { this.end(); return }
+      // Losing a Princess Tower activates that side's King Tower.
+      const king = this.towers.find((t) => t.side === tw.side && t.kind === 'king')
+      if (king) king.active = true
+      this.events.onBanner(tw.side === 'red' ? 'Tower destroyed!' : 'Your tower fell!', tw.side === 'red' ? '+1 crown' : 'Defend the King!')
+      // In the tiebreaker the first tower to fall decides the match.
+      if (this.tiebreaker) { this.end(); return }
     }
     this.events.onUpdate()
   }
@@ -197,31 +222,50 @@ export class Game {
     return lead ? { level, x: lead.x * flip, z: lead.z * flip } : null
   }
 
+  /** Elixir generation multiplier: 1x normally, 2x in the last minute of regular time and the first minute of Overtime, 3x in the final minute of Overtime. */
+  private elixirRate(): number {
+    if (!this.overtime) return this.timeLeft <= 60 ? 2 : 1
+    return this.timeLeft > 60 ? 2 : 3
+  }
+
   update(dt: number) {
     if (this.phase !== 'playing') return
-    // Timer
+    // Timer — 3:00 regular time, then 2:00 Overtime if tied on crowns, then a tiebreaker.
     this.timeLeft -= dt
     if (this.timeLeft <= 0) {
       if (!this.overtime) {
         if (this.blueCrowns !== this.redCrowns) { this.end(); return }
-        this.overtime = true; this.timeLeft = 60
+        this.overtime = true; this.timeLeft = 120
         this.events.onBanner('Overtime — Sudden Death', 'Next tower wins!')
         sfx.crown()
-      } else { this.end(); return }
+      } else if (!this.tiebreaker) {
+        this.tiebreaker = true
+        this.events.onBanner('Tiebreaker!', 'Lowest tower falls!')
+        sfx.crown()
+      }
     }
-    // Elixir regen (2x in last minute / overtime)
-    const rate = (this.overtime || this.timeLeft < 60) ? 2 : 1
+    if (this.tiebreaker) {
+      // Every tower drains 10% of its max HP per second; the lowest-HP% tower falls first.
+      // Identical HP% means they fall on the same tick and the match is a draw.
+      for (const tw of this.towers) {
+        if (tw.alive) this.damageTower(tw, tw.maxHp * 0.1 * dt)
+        if (this.phase !== 'playing') return
+      }
+    }
+    // Elixir: 1 per 2.8s; double in the last minute of regular time and the
+    // first minute of Overtime; triple in the final minute of Overtime.
+    const rate = this.elixirRate()
     this.elixir = Math.min(this.elixirMax, this.elixir + dt * rate * (1 / 2.8))
-    if (this.mode === 'spectate' && this.spectateAI) this.blueElixir = Math.min(10, this.blueElixir + dt * (1 / 2.8))
+    if (this.mode === 'spectate' && this.spectateAI) this.blueElixir = Math.min(10, this.blueElixir + dt * rate * (1 / 2.8))
 
     // Rival AI
     this.aiTimer += dt
     if (this.aiTimer > 0.5) {
       this.aiTimer = 0
-      const dec = this.ai.update(0.5, this.threatTo('red'), this.troops.filter((t) => t.side === 'red').length)
+      const dec = this.ai.update(0.5, this.threatTo('red'), this.troops.filter((t) => t.side === 'red').length, 10, rate)
       if (dec) this.deploy(dec.cardId, 'red', dec.x, dec.z, dec.lane)
       if (this.mode === 'spectate' && this.spectateAI) {
-        const decB = this.spectateAI.update(0.5, this.threatTo('blue'), this.troops.filter((t) => t.side === 'blue').length)
+        const decB = this.spectateAI.update(0.5, this.threatTo('blue'), this.troops.filter((t) => t.side === 'blue').length, 10, rate)
         if (decB && this.spectateAI.elixir >= CARDS[decB.cardId].cost) {
           // Spectate blue AI deploys on blue side, bypassing player elixir.
           const def = CARDS[decB.cardId]
@@ -265,27 +309,28 @@ export class Game {
       const inRangeTower = towerTarget && bestT <= def.range + 0.8
       if (inRangeTroop && target) {
         if (t.attackCd <= 0) {
-          t.attackCd = 1
+          t.attackCd = def.hitSpeed
           const dmg = def.damage * (t.side === 'red' ? this.ai.damageMultiplier() : 1)
-          // Prince charge: double damage on first hit after moving.
-          target.hp -= t.cardId === 'prince' && Math.abs(t.z) > 4 ? dmg * 1.6 : dmg
+          // Prince charge: double damage on the first hit after a run-up.
+          target.hp -= t.cardId === 'prince' && Math.abs(t.z) > 4 ? dmg * 2 : dmg
           sfx.hit()
           this.emitShot(t, target)
           if (def.splash) {
-            for (const e of this.troops) if (e.side !== t.side && !e.dead && Math.hypot(e.x - target.x, e.z - target.z) < 1.6) e.hp -= dmg * 0.5
+            // Splash hits every other enemy in the blast radius for full damage (the primary target was already hit above).
+            for (const e of this.troops) if (e !== target && e.side !== t.side && !e.dead && Math.hypot(e.x - target.x, e.z - target.z) < 1.6) e.hp -= dmg
           }
           if (target.hp <= 0) this.kill(target)
         }
       } else if (inRangeTower && towerTarget) {
         if (t.attackCd <= 0) {
-          t.attackCd = 1
+          t.attackCd = def.hitSpeed
           this.damageTower(towerTarget, def.damage * (t.side === 'red' ? this.ai.damageMultiplier() : 1))
           sfx.hit()
           this.emitShot(t, towerTarget)
         }
       } else {
-        // Move toward target tower / troop.
-        const dest = target && best < 9 ? target : towerTarget
+        // Move toward the nearest enemy troop within sight range (5.5), else toward the tower.
+        const dest = target && best <= 5.5 ? target : towerTarget
         if (dest) {
           const dx = dest.x - t.x; const dz = dest.z - t.z
           const d = Math.hypot(dx, dz) || 1
@@ -297,26 +342,28 @@ export class Game {
       // Tower counter-attack (princess towers shoot).
       // Handled below per-tower.
     }
-    // Tower shots
+    // Tower shots — discrete cannon shots, not continuous damage.
+    // Princess: 109 damage every 0.8s, range 7.5. King: 109 every 1.0s, range 7,
+    // but only once activated (damaged, or a friendly Princess Tower falls).
     for (const tw of this.towers) {
-      if (!tw.alive || tw.kind !== 'princess') continue
-      let nearest: TroopState | null = null; let bd = 7.5
+      if (!tw.alive || !tw.active) continue
+      const range = tw.kind === 'princess' ? 7.5 : 7
+      const hitSpeed = tw.kind === 'princess' ? 0.8 : 1.0
+      let nearest: TroopState | null = null; let bd = range
       for (const t of this.troops) {
         if (t.side === tw.side || t.dead) continue
         const d = Math.hypot(t.x - tw.x, t.z - tw.z)
         if (d < bd) { bd = d; nearest = t }
       }
       if (nearest) {
-        // Simple cooldown via time-based chance per frame is jittery; use hp tick.
-        nearest.hp -= 42 * dt
-        if (nearest.hp <= 0) this.kill(nearest)
-        // Visual cannon shot every ~0.8s while a target is in range (damage itself stays continuous).
         tw.shotCd = (tw.shotCd ?? 0) - dt
         if (tw.shotCd <= 0) {
-          tw.shotCd = 0.8
+          tw.shotCd = hitSpeed
+          nearest.hp -= 109
+          if (nearest.hp <= 0) this.kill(nearest)
           this.events.onShot({
             kind: 'cannon',
-            from: { x: tw.x, y: 3.0, z: tw.z },
+            from: { x: tw.x, y: tw.kind === 'princess' ? 3.0 : 3.6, z: tw.z },
             to: { x: nearest.x, y: nearest.flying ? 1.7 : 1.0, z: nearest.z },
           })
         }

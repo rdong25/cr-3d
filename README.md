@@ -38,11 +38,25 @@ Requires Node 18+.
   tower falls.
 - **10 original cards, 8-card deck builder**: Knight, Archers, Giant,
   Musketeer, Minions, Bomber, Prince, Skeletons, Baby Dragon, Fireball
-  (spell). Elixir-based deployment, ×2 elixir in the last minute / overtime.
+  (spell). All stats are Clash Royale Level 11 (Tournament Standard), with
+  per-card hit speeds — Knight 1.1s, Archers 0.9s, Giant 1.5s, Musketeer
+  1.1s, Minions 1.0s, Bomber 1.9s, Prince 1.4s, Skeletons 1.0s, Baby Dragon
+  1.6s. Troops only chase enemies within sight range (5.5); otherwise they
+  walk to the tower. Splash hits every enemy in the blast radius for full
+  damage; Prince charges for double damage.
 - **Rival AI** that defends when threatened, pushes when elixir is high, and
   levels up as your trophies grow.
 - **3-minute matches + overtime sudden death** — most crowns wins; tied at
   full time, next tower wins. King tower falling ends the match.
+  **Rules follow the real game**: elixir starts at 5 (max 10), 1 per 2.8s,
+  ×2 in the last minute and the first minute of Overtime, ×3 in the final
+  minute of Overtime; Overtime lasts 2:00, then a tiebreaker drains every
+  tower until the lowest-HP one falls (identical HP% is a draw). Princess
+  Towers (3,052 HP) shoot 109 damage every 0.8s at range 7.5; the King Tower
+  (4,824 HP) is dormant until damaged or a Princess Tower falls, then shoots
+  109 every 1.0s at range 7. Spells deal 35% damage to towers. Taking an
+  enemy Princess Tower annexes the ground past the bridge in that lane, so
+  you can deploy troops there.
 - **Three cameras**: Broadcast (drag to angle), Orbit cinematic, and
   **first-person** — walk with WASD / arrow keys or the on-screen joystick,
   drag to look, click the arena to deploy at the reticle — plus a

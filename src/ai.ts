@@ -37,8 +37,10 @@ export class RivalAI {
    * to subtract here as well, so every play was paid twice and nearly always
    * rejected; the AI almost never got a troop onto the field.)
    */
-  update(dt: number, threat: Threat | null, myTroops: number, elixirCap = 10): AIDecision | null {
-    this.elixir = Math.min(elixirCap, this.elixir + dt * (1 / 2.8))
+  update(dt: number, threat: Threat | null, myTroops: number, elixirCap = 10, elixirRate = 1): AIDecision | null {
+    // The AI's elixir follows the same clock as the player's: double in the
+    // last minute, triple in the final minute of Overtime.
+    this.elixir = Math.min(elixirCap, this.elixir + dt * elixirRate * (1 / 2.8))
     this.timer += dt
     if (this.timer < 0.8) return null
     this.timer = 0
