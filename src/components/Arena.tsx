@@ -109,15 +109,24 @@ const Arena = forwardRef<ArenaHandle, Props>(function Arena({ profile, mode, act
     }
 
     let lastError = ''
+    const SIM_STEP = 1 / 60
+    let simDebt = 0
     const loop = (now: number) => {
       if (!alive || !engine || !game) return
       // Schedule the next frame first: an exception below must never freeze the
       // match (elixir, timer and troops all stop if the loop dies).
       raf = requestAnimationFrame(loop)
-      const dt = Math.max(0, Math.min(0.05, (now - last) / 1000))
+      // Game logic runs on real elapsed time in fixed 1/60 s steps. It used to
+      // advance at most 0.05 s per drawn frame, so below 20 fps the whole match
+      // (elixir, timer, troops) slowed down. Cap catch-up at 1 s per frame,
+      // e.g. after the tab was in the background.
+      const dt = Math.max(0, Math.min(1, (now - last) / 1000))
       last = now
       try {
-        if (active) game.update(dt)
+        if (active) {
+          simDebt += dt
+          while (simDebt >= SIM_STEP) { game.update(SIM_STEP); simDebt -= SIM_STEP }
+        }
         const sel = game.selected
         const canPlay = active && game.mode === 'battle' && game.phase === 'playing' && sel != null && game.elixir >= CARDS[sel].cost
         engine.setDeployHint(canPlay ? (sel === 'fireball' ? 'spell' : 'troop') : null)
